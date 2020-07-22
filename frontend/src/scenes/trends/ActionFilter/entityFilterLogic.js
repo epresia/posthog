@@ -20,9 +20,9 @@ function toFilters(localFilters) {
     }))
 
     return {
-        [EntityTypes.ACTIONS]: filters.filter(filter => filter.type === EntityTypes.ACTIONS),
-        [EntityTypes.EVENTS]: filters.filter(filter => filter.type === EntityTypes.EVENTS),
-        [EntityTypes.NEW_ENTITY]: filters.filter(filter => filter.type === EntityTypes.NEW_ENTITY),
+        [EntityTypes.ACTIONS]: filters.filter((filter) => filter.type === EntityTypes.ACTIONS),
+        [EntityTypes.EVENTS]: filters.filter((filter) => filter.type === EntityTypes.EVENTS),
+        [EntityTypes.NEW_ENTITY]: filters.filter((filter) => filter.type === EntityTypes.NEW_ENTITY),
     }
 }
 
@@ -31,24 +31,25 @@ function toFilters(localFilters) {
 // - setFilters
 // - typeKey
 export const entityFilterLogic = kea({
-    key: props => props.typeKey,
+    key: (props) => props.typeKey,
     connect: {
         values: [userLogic, ['eventNames'], actionsModel, ['actions']],
     },
     actions: () => ({
-        selectFilter: filter => ({ filter }),
-        updateFilterMath: filter => ({
+        selectFilter: (filter) => ({ filter }),
+        updateFilterMath: (filter) => ({
             type: filter.type,
             value: filter.value,
             math: filter.math,
+            math_property: filter.math_property,
             index: filter.index,
         }),
-        updateFilter: filter => ({ type: filter.type, index: filter.index, value: filter.value, name: filter.name }),
-        removeLocalFilter: filter => ({ value: filter.value, type: filter.type, index: filter.index }),
+        updateFilter: (filter) => ({ type: filter.type, index: filter.index, value: filter.value, name: filter.name }),
+        removeLocalFilter: (filter) => ({ value: filter.value, type: filter.type, index: filter.index }),
         addFilter: true,
-        updateFilterProperty: filter => ({ properties: filter.properties, index: filter.index }),
-        setFilters: filters => ({ filters }),
-        setLocalFilters: filters => ({ filters }),
+        updateFilterProperty: (filter) => ({ properties: filter.properties, index: filter.index }),
+        setFilters: (filters) => ({ filters }),
+        setLocalFilters: (filters) => ({ filters }),
     }),
 
     reducers: ({ props }) => ({
@@ -72,11 +73,11 @@ export const entityFilterLogic = kea({
             (events, actions) => {
                 return {
                     [EntityTypes.ACTIONS]: actions,
-                    [EntityTypes.EVENTS]: events.map(event => ({ id: event, name: event })),
+                    [EntityTypes.EVENTS]: events.map((event) => ({ id: event, name: event })),
                 }
             },
         ],
-        filters: [() => [selectors.localFilters], localFilters => toFilters(localFilters)],
+        filters: [() => [selectors.localFilters], (localFilters) => toFilters(localFilters)],
     }),
 
     listeners: ({ actions, values, props }) => ({
@@ -84,15 +85,17 @@ export const entityFilterLogic = kea({
             actions.setFilters(
                 values.localFilters.map((filter, i) => (i === index ? { ...filter, id: value, name, type } : filter))
             )
-            actions.selectFilter(null)
+            !props.singleMode && actions.selectFilter(null)
         },
         updateFilterProperty: ({ properties, index }) => {
             actions.setFilters(
                 values.localFilters.map((filter, i) => (i === index ? { ...filter, properties } : filter))
             )
         },
-        updateFilterMath: ({ math, index }) => {
-            actions.setFilters(values.localFilters.map((filter, i) => (i === index ? { ...filter, math } : filter)))
+        updateFilterMath: ({ math, math_property, index }) => {
+            actions.setFilters(
+                values.localFilters.map((filter, i) => (i === index ? { ...filter, math, math_property } : filter))
+            )
         },
         removeLocalFilter: ({ index }) => {
             actions.setFilters(values.localFilters.filter((_, i) => i !== index))
@@ -105,6 +108,15 @@ export const entityFilterLogic = kea({
         },
         setFilters: ({ filters }) => {
             props.setFilters(toFilters(filters))
+        },
+    }),
+    events: ({ actions, props, values }) => ({
+        afterMount: () => {
+            if (props.singleMode) {
+                const filter = { id: null, type: EntityTypes.NEW_ENTITY, order: values.localFilters.length }
+                actions.setLocalFilters({ [`${EntityTypes.NEW_ENTITY}`]: [filter] })
+                actions.selectFilter({ filter, type: EntityTypes.NEW_ENTITY, index: 0 })
+            }
         },
     }),
 })

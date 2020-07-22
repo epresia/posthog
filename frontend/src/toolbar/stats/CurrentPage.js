@@ -3,6 +3,7 @@ import React, { useState } from 'react'
 import { useValues } from 'kea'
 import { GlobalOutlined } from '@ant-design/icons'
 import { currentPageLogic } from '~/toolbar/stats/currentPageLogic'
+import { Comment } from 'antd'
 
 function getFavicon() {
     var favicon = undefined
@@ -35,10 +36,10 @@ export function CurrentPage() {
     const [showIcon, setShowIcon] = useState(true)
 
     return (
-        <div className="toolbar-block current-page">
-            <div className="with-left-icon">
-                <div className="icon-part">
-                    {showIcon ? (
+        <div className="current-page">
+            <Comment
+                avatar={
+                    showIcon ? (
                         <img
                             src={getFavicon()}
                             onError={() => setShowIcon(false)}
@@ -48,9 +49,9 @@ export function CurrentPage() {
                         />
                     ) : (
                         <GlobalOutlined />
-                    )}
-                </div>
-                <div className="text-part">
+                    )
+                }
+                content={
                     <div>
                         <div>{window.document.title}</div>
                         <div className="small-url-link">
@@ -59,8 +60,8 @@ export function CurrentPage() {
                             </a>
                         </div>
                     </div>
-                </div>
-            </div>
+                }
+            />
         </div>
     )
 }

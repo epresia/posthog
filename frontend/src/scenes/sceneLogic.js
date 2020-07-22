@@ -12,6 +12,7 @@ export const scenes = {
     sessions: () => import(/* webpackChunkName: 'events' */ './sessions/Sessions'),
     person: () => import(/* webpackChunkName: 'person' */ './users/Person'),
     people: () => import(/* webpackChunkName: 'people' */ './users/People'),
+    retention: () => import(/* webpackChunkName: 'retention' */ './retention/Retention'),
     actions: () => import(/* webpackChunkName: 'actions' */ './actions/Actions'),
     action: () => import(/* webpackChunkName: 'action' */ './actions/Action'),
     liveActions: () => import(/* webpackChunkName: 'liveActions' */ './actions/LiveActions'),
@@ -23,6 +24,7 @@ export const scenes = {
     paths: () => import(/* webpackChunkName: 'paths' */ './paths/Paths'),
     cohorts: () => import(/* webpackChunkName: 'cohorts' */ './users/Cohorts'),
     featureFlags: () => import(/* webpackChunkName: 'featureFlags' */ './experiments/FeatureFlags'),
+    annotations: () => import(/* webpackChunkName: 'annotations' */ './annotations/AnnotationsScene'),
 }
 
 export const redirects = {
@@ -47,9 +49,11 @@ export const routes = {
     '/person/*': 'person',
     '/people': 'people',
     '/people/new_cohort': 'people',
+    '/people/retention': 'retention',
     '/people/cohorts': 'cohorts',
     '/experiments/feature_flags': 'featureFlags',
     '/sessions': 'sessions',
+    '/annotations': 'annotations',
 }
 
 export const sceneLogic = kea({
@@ -94,14 +98,14 @@ export const sceneLogic = kea({
 
         for (const [paths, redirect] of Object.entries(redirects)) {
             for (const path of paths.split('|')) {
-                mapping[path] = params =>
+                mapping[path] = (params) =>
                     router.actions.replace(typeof redirect === 'function' ? redirect(params) : redirect)
             }
         }
 
         for (const [paths, scene] of Object.entries(routes)) {
             for (const path of paths.split('|')) {
-                mapping[path] = params => actions.loadScene(scene, params)
+                mapping[path] = (params) => actions.loadScene(scene, params)
             }
         }
         mapping['/*'] = () => actions.loadScene('404', {})

@@ -4,10 +4,30 @@ import { AppEditorLink } from '../../lib/components/AppEditorLink/AppEditorLink'
 import { PropertyFilters } from 'lib/components/PropertyFilters/PropertyFilters'
 import PropTypes from 'prop-types'
 
-let getSafeText = el => {
+const MATCHING_NOTES = {
+    contains: (
+        <>
+            Use <code>%</code> for wildcard, for example: <code>/user/%/edit</code>.
+        </>
+    ),
+    regex: (
+        <>
+            <a
+                href="https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-POSIX-REGEXP"
+                target="_blank"
+                rel="noreferrer"
+            >
+                PostgreSQL regular expression syntax
+            </a>{' '}
+            applies.
+        </>
+    ),
+}
+
+let getSafeText = (el) => {
     if (!el.childNodes || !el.childNodes.length) return
     let elText = ''
-    el.childNodes.forEach(child => {
+    el.childNodes.forEach((child) => {
         if (child.nodeType !== 3 || !child.textContent) return
         elText += child.textContent
             .trim()
@@ -17,12 +37,13 @@ let getSafeText = el => {
     })
     return elText
 }
+
 export class ActionStep extends Component {
     constructor(props) {
         super(props)
         this.state = {
             step: props.step,
-            selection: Object.keys(props.step).filter(key => key != 'id' && key != 'isNew' && props.step[key]),
+            selection: Object.keys(props.step).filter((key) => key != 'id' && key != 'isNew' && props.step[key]),
             inspecting: false,
         }
         this.AutocaptureFields = this.AutocaptureFields.bind(this)
@@ -42,12 +63,12 @@ export class ActionStep extends Component {
         this.box.style.opacity = '0.5'
         this.box.style.zIndex = '9999999999'
     }
-    onMouseOver = event => {
+    onMouseOver = (event) => {
         let el = event.currentTarget
         this.drawBox(el)
         let query = this.props.simmer(el)
         // Turn tags into lower cases
-        query = query.replace(/(^[A-Z]+| [A-Z]+)/g, d => d.toLowerCase())
+        query = query.replace(/(^[A-Z]+| [A-Z]+)/g, (d) => d.toLowerCase())
         let tagName = el.tagName.toLowerCase()
 
         let selection = ['selector']
@@ -72,13 +93,13 @@ export class ActionStep extends Component {
             () => this.sendStep(step)
         )
     }
-    onKeyDown = event => {
+    onKeyDown = (event) => {
         // stop selecting if esc key was pressed
         if (event.keyCode == 27) this.stop()
     }
     start() {
         this.setState({ inspecting: true })
-        document.querySelectorAll('a, button, input, select, textarea, label').forEach(element => {
+        document.querySelectorAll('a, button, input, select, textarea, label').forEach((element) => {
             element.addEventListener('mouseover', this.onMouseOver, {
                 capture: true,
             })
@@ -93,19 +114,19 @@ export class ActionStep extends Component {
         this.setState({ inspecting: false })
         this.box.style.display = 'none'
         document.body.style.boxShadow = 'none'
-        document.querySelectorAll('a, button, input, select, textarea, label').forEach(element => {
+        document.querySelectorAll('a, button, input, select, textarea, label').forEach((element) => {
             element.removeEventListener('mouseover', this.onMouseOver, {
                 capture: true,
             })
         })
         document.removeEventListener('keydown', this.onKeyDown)
     }
-    sendStep = step => {
+    sendStep = (step) => {
         step.selection = this.state.selection
         this.props.onChange(step)
     }
-    Option = props => {
-        let onChange = e => {
+    Option = (props) => {
+        let onChange = (e) => {
             this.props.step[props.item] = e.target.value
 
             if (e.target.value && this.state.selection.indexOf(props.item) === -1) {
@@ -115,7 +136,7 @@ export class ActionStep extends Component {
             } else if (!e.target.value && this.state.selection.indexOf(props.item) > -1) {
                 this.setState(
                     {
-                        selection: this.state.selection.filter(i => i !== props.item),
+                        selection: this.state.selection.filter((i) => i !== props.item),
                     },
                     () => this.sendStep(this.props.step)
                 )
@@ -142,12 +163,12 @@ export class ActionStep extends Component {
                         name="selection"
                         checked={this.state.selection.indexOf(props.item) > -1}
                         value={props.item}
-                        onChange={e => {
+                        onChange={(e) => {
                             let { selection } = this.state
                             if (e.target.checked) {
                                 selection.push(props.item)
                             } else {
-                                selection = selection.filter(i => i !== props.item)
+                                selection = selection.filter((i) => i !== props.item)
                             }
                             this.setState({ selection }, () => this.sendStep(this.props.step))
                         }}
@@ -178,7 +199,7 @@ export class ActionStep extends Component {
                             this.setState(
                                 {
                                     selection: Object.keys(step).filter(
-                                        key => key != 'id' && key != 'isNew' && step[key]
+                                        (key) => key != 'id' && key != 'isNew' && step[key]
                                     ),
                                 },
                                 () => this.sendStep({ ...step, event: '$autocapture' })
@@ -278,11 +299,18 @@ export class ActionStep extends Component {
                     contains
                 </button>
                 <button
+                    onClick={() => this.sendStep({ ...step, url_matching: 'regex' })}
+                    type="button"
+                    className={'btn btn-sm ' + (step.url_matching == 'regex' ? 'btn-secondary' : 'btn-light')}
+                >
+                    matches regex
+                </button>
+                <button
                     onClick={() => this.sendStep({ ...step, url_matching: 'exact' })}
                     type="button"
                     className={'btn btn-sm ' + (step.url_matching == 'exact' ? 'btn-secondary' : 'btn-light')}
                 >
-                    exactly matches
+                    matches exactly
                 </button>
             </div>
         )
@@ -345,22 +373,12 @@ export class ActionStep extends Component {
                                 <EventName
                                     value={step.event}
                                     isActionStep={true}
-                                    onChange={value =>
+                                    onChange={(value) =>
                                         this.sendStep({
                                             ...step,
                                             event: value,
                                         })
                                     }
-                                />
-                                <PropertyFilters
-                                    propertyFilters={step.properties}
-                                    pageKey={'action-edit'}
-                                    onChange={properties => {
-                                        this.sendStep({
-                                            ...this.props.step, // Not sure why, but the normal 'step' variable does not work here
-                                            properties,
-                                        })
-                                    }}
                                 />
                             </div>
                         )}
@@ -371,12 +389,24 @@ export class ActionStep extends Component {
                                     extra_options={<this.URLMatching step={step} isEditor={isEditor} />}
                                     label="URL"
                                 />
-                                {(!step.url_matching || step.url_matching == 'contains') && (
+                                {step.url_matching && step.url_matching in MATCHING_NOTES && (
                                     <small style={{ display: 'block', marginTop: -12 }}>
-                                        Use '%' for wildcard, for example: /user/%/edit
+                                        {MATCHING_NOTES[step.url_matching]}
                                     </small>
                                 )}
                             </div>
+                        )}
+                        {!isEditor && (
+                            <PropertyFilters
+                                propertyFilters={step.properties}
+                                pageKey={'action-edit'}
+                                onChange={(properties) => {
+                                    this.sendStep({
+                                        ...this.props.step, // Not sure why, but the normal 'step' variable does not work here
+                                        properties,
+                                    })
+                                }}
+                            />
                         )}
                     </div>
                 </div>

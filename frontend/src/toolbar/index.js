@@ -12,19 +12,13 @@ initKea()
 
 window.simmer = new Simmer(window, { depth: 8 })
 
-window.ph_load_editor = function(editorParams) {
+window.ph_load_editor = function (editorParams) {
     let container = document.createElement('div')
     document.body.appendChild(container)
 
     ReactDOM.render(
         <Provider store={getContext().store}>
-            <ToolbarApp
-                jsURL={editorParams.jsURL || editorParams.apiURL}
-                apiURL={editorParams.apiURL}
-                temporaryToken={editorParams.temporaryToken}
-                actionId={editorParams.actionId}
-                userIntent={editorParams.userIntent}
-            />
+            <ToolbarApp {...editorParams} jsURL={editorParams.jsURL || editorParams.apiURL} />
         </Provider>,
         container
     )

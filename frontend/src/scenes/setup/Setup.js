@@ -1,6 +1,7 @@
 import React from 'react'
 import { useValues } from 'kea'
 import { Divider } from 'antd'
+import { IPCapture } from './IPCapture'
 import { JSSnippet } from 'lib/components/JSSnippet'
 import { InviteTeam } from 'lib/components/InviteTeam'
 import { OptOutCapture } from './OptOutCapture'
@@ -14,6 +15,7 @@ import { ChangePassword } from './ChangePassword'
 import { useAnchor } from 'lib/hooks/useAnchor'
 import { router } from 'kea-router'
 import { hot } from 'react-hot-loader/root'
+import { ToolbarSettings } from 'scenes/setup/ToolbarSettings'
 
 export const Setup = hot(_Setup)
 function _Setup() {
@@ -41,9 +43,9 @@ function _Setup() {
             This key is write-only, in that it can only create new events. It can't read any events or any of your other
             data stored on PostHog.
             <Divider />
-            <h2 id="urls">Permitted domains</h2>
-            These are the domains and urls where the toolbar will automatically open if you're logged in. It's also the
-            domains where you'll be able to create actions on.
+            <h2 id="urls">Permitted Domains/URLs</h2>
+            These are the domains and URLs where the Toolbar will automatically open if you're logged in. It's also
+            where you'll be able to create Actions.
             <EditAppUrls />
             <Divider />
             <h2 id="slack">Slack or Teams Integration</h2>
@@ -65,8 +67,16 @@ function _Setup() {
             <h2 id="optout">Anonymize data collection</h2>
             <OptOutCapture />
             <Divider />
+            <h2 id="datacapture">Data capture configuration</h2>
+            <IPCapture />
+            <Divider />
             <h2>Security and feature updates</h2>
             <UpdateEmailPreferences />
+            <Divider />
+            <h2>
+                PostHog Toolbar (<span style={{ color: 'red' }}>BETA</span>)
+            </h2>
+            <ToolbarSettings />
         </div>
     )
 }
