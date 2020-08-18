@@ -1,6 +1,8 @@
-from .base import BaseTest
-from posthog.models import Person, Event, Cohort
 import json
+
+from posthog.models import Cohort, Event, Person
+
+from .base import BaseTest
 
 
 class TestPerson(BaseTest):
@@ -19,6 +21,9 @@ class TestPerson(BaseTest):
         self.assertEqual(len(response["results"]), 2)
 
         response = self.client.get("/api/person/?search=another@gm").json()
+        self.assertEqual(len(response["results"]), 1)
+
+        response = self.client.get("/api/person/?search=_id_3").json()
         self.assertEqual(len(response["results"]), 1)
 
     def test_properties(self):

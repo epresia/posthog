@@ -3,14 +3,13 @@ import { useValues } from 'kea'
 import { Divider } from 'antd'
 import { IPCapture } from './IPCapture'
 import { JSSnippet } from 'lib/components/JSSnippet'
-import { InviteTeam } from 'lib/components/InviteTeam'
 import { OptOutCapture } from './OptOutCapture'
 import { UpdateEmailPreferences } from './UpdateEmailPreferences'
 import { EditAppUrls } from 'lib/components/AppEditorLink/EditAppUrls'
 
 import { userLogic } from 'scenes/userLogic'
 import { DeleteDemoData } from './DeleteDemoData'
-import { SlackIntegration } from 'scenes/setup/SlackIntegration'
+import { WebhookIntegration } from 'scenes/setup/WebhookIntegration'
 import { ChangePassword } from './ChangePassword'
 import { useAnchor } from 'lib/hooks/useAnchor'
 import { router } from 'kea-router'
@@ -48,15 +47,8 @@ function _Setup() {
             where you'll be able to create Actions.
             <EditAppUrls />
             <Divider />
-            <h2 id="slack">Slack or Teams Integration</h2>
-            <SlackIntegration />
-            <Divider />
-            <h2 id="invite">Invite your team</h2>
-            <div className="row">
-                <div className="col-lg-6">
-                    <InviteTeam user={user} />
-                </div>
-            </div>
+            <h2 id="webhook">Slack / Microsoft Teams Integration</h2>
+            <WebhookIntegration />
             <Divider />
             <h2 id="demodata">Delete HogFlix demo data</h2>
             <DeleteDemoData />

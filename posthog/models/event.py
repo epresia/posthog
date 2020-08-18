@@ -1,47 +1,44 @@
-from posthog.models.entity import Entity
-from django.core.cache import cache
-from django.conf import settings
-from django.db import models, transaction
-from django.db.models import (
-    Exists,
-    OuterRef,
-    Q,
-    Subquery,
-    F,
-    signals,
-    Prefetch,
-    QuerySet,
-    Value,
-)
-from django.db import connection
-from django.db.models.functions import TruncDay
-from django.contrib.postgres.fields import JSONField
-from django.utils import timezone
-from django.forms.models import model_to_dict
-from posthog.constants import TREND_FILTER_TYPE_ACTIONS, TREND_FILTER_TYPE_EVENTS
-
-from psycopg2 import sql  # type: ignore
-
-from .element_group import ElementGroup
-from .element import Element
-from .action import Action
-from .action_step import ActionStep
-from .person import PersonDistinctId, Person
-from .team import Team
-from .filter import Filter
-from .utils import namedtuplefetchall
-
-from posthog.utils import generate_cache_key
-
-from posthog.tasks.slack import post_event_to_slack
-from typing import Dict, Union, List, Optional, Any, Tuple
-
-from collections import defaultdict
 import copy
 import datetime
-import re
 import random
+import re
 import string
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import celery
+from django.conf import settings
+from django.contrib.postgres.fields import JSONField
+from django.core.cache import cache
+from django.db import connection, models, transaction
+from django.db.models import (
+    Exists,
+    F,
+    OuterRef,
+    Prefetch,
+    Q,
+    QuerySet,
+    Subquery,
+    Value,
+    signals,
+)
+from django.db.models.functions import TruncDay
+from django.forms.models import model_to_dict
+from django.utils import timezone
+from psycopg2 import sql  # type: ignore
+
+from posthog.constants import TREND_FILTER_TYPE_ACTIONS, TREND_FILTER_TYPE_EVENTS
+from posthog.models.entity import Entity
+from posthog.utils import generate_cache_key
+
+from .action import Action
+from .action_step import ActionStep
+from .element import Element
+from .element_group import ElementGroup
+from .filter import Filter
+from .person import Person, PersonDistinctId
+from .team import Team
+from .utils import namedtuplefetchall
 
 attribute_regex = r"([a-zA-Z]*)\[(.*)=[\'|\"](.*)[\'|\"]\]"
 
@@ -56,6 +53,10 @@ class SelectorPart(object):
     direct_descendant = False
     unique_order = 0
 
+    def _unescape_class(self, class_name):
+        # separate all double slashes "\\" (replace them with "\") and remove all single slashes between them
+        return "\\".join([p.replace("\\", "") for p in class_name.split("\\\\")])
+
     def __init__(self, tag: str, direct_descendant: bool):
         self.direct_descendant = direct_descendant
         self.data: Dict[str, Union[str, List]] = {}
@@ -65,7 +66,7 @@ class SelectorPart(object):
             self.data["attr_id"] = result[3]
             tag = result[1]
         if result and "[" in tag:
-            self.data["attributes__{}".format(result[2])] = result[3]
+            self.data["attributes__attr__{}".format(result[2])] = result[3]
             tag = result[1]
         if "nth-child(" in tag:
             parts = tag.split(":nth-child(")
@@ -73,10 +74,26 @@ class SelectorPart(object):
             tag = parts[0]
         if "." in tag:
             parts = tag.split(".")
-            self.data["attr_class__contains"] = parts[1:]
+            # strip all slashes that are not followed by another slash
+            self.data["attr_class__contains"] = [self._unescape_class(p) for p in parts[1:]]
             tag = parts[0]
         if tag:
             self.data["tag_name"] = tag
+
+    @property
+    def extra_query(self) -> Dict[str, List[Union[str, List[str]]]]:
+        where: List[Union[str, List[str]]] = []
+        params: List[Union[str, List[str]]] = []
+        for key, value in self.data.items():
+            if "attr__" in key:
+                where.append("(attributes ->> 'attr__{}') = %s".format(key.split("attr__")[1]))
+            else:
+                if "__contains" in key:
+                    where.append("{} @> %s::varchar(200)[]".format(key.replace("__contains", "")))
+                else:
+                    where.append("{} = %s".format(key))
+            params.append(value)
+        return {"where": where, "params": params}
 
 
 class Selector(object):
@@ -103,9 +120,10 @@ class EventManager(models.QuerySet):
         subqueries = {}
         for index, tag in enumerate(selector.parts):
             subqueries["match_{}".format(index)] = Subquery(
-                Element.objects.filter(group_id=OuterRef("pk"), **tag.data)
+                Element.objects.filter(group_id=OuterRef("pk"))
                 .values("order")
                 .order_by("order")
+                .extra(**tag.extra_query)  # type: ignore
                 # If there's two of the same element, for the second one we need to shift one
                 [tag.unique_order : tag.unique_order + 1]
             )
@@ -135,6 +153,7 @@ class EventManager(models.QuerySet):
 
         if not filter:
             return {}
+
         groups = groups.filter(**filter)
         return {"elements_hash__in": groups.values_list("hash", flat=True)}
 
@@ -266,7 +285,7 @@ class EventManager(models.QuerySet):
 
         by_dates = {}
         for row in data:
-            people = sorted(row.people, key=lambda p: scores[round(row.first_date, 1)][int(p)], reverse=True)
+            people = sorted(row.people, key=lambda p: scores[round(row.first_date, 1)][int(p)], reverse=True,)
 
             random_key = "".join(
                 random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(10)
@@ -305,17 +324,16 @@ class EventManager(models.QuerySet):
             # In a few cases we have had it OOM Postgres with the query it is running
             # Short term solution is to have this be configurable to be run in batch
             if not settings.ASYNC_EVENT_ACTION_MAPPING:
-                should_post_to_slack = False
+                should_post_webhook = False
                 relations = []
                 for action in event.actions:
                     relations.append(action.events.through(action_id=action.pk, event_id=event.pk))
                     if action.post_to_slack:
-                        should_post_to_slack = True
-
+                        should_post_webhook = True
                 Action.events.through.objects.bulk_create(relations, ignore_conflicts=True)
                 team = kwargs.get("team", event.team)
-                if should_post_to_slack and team and team.slack_incoming_webhook:
-                    post_event_to_slack.delay(event.pk, site_url)
+                if should_post_webhook and team and team.slack_incoming_webhook:
+                    celery.current_app.send_task("posthog.tasks.webhooks.post_event_to_webhook", (event.pk, site_url))
 
             return event
 
@@ -412,7 +430,7 @@ class Event(models.Model):
                 events = namedtuplefetchall(cursor)
 
         event = [event for event in events][0]
-        filtered_actions = [action for action in actions if getattr(event, "action_{}".format(action.pk))]
+        filtered_actions = [action for action in actions if getattr(event, "action_{}".format(action.pk), None)]
         return filtered_actions
 
     created_at: models.DateTimeField = models.DateTimeField(auto_now_add=True, null=True, blank=True)

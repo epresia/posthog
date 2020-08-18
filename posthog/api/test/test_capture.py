@@ -1,14 +1,16 @@
-from .base import BaseTest
+import base64
+import gzip
+import json
+from datetime import timedelta
+from unittest.mock import call, patch
+from urllib.parse import quote
+
+import lzstring  # type: ignore
 from django.conf import settings
 from django.utils import timezone
 from freezegun import freeze_time
-from unittest.mock import patch, call
-from datetime import timedelta
-from urllib.parse import quote
-import base64
-import json
-import gzip
-import lzstring  # type: ignore
+
+from .base import BaseTest
 
 
 class TestCapture(BaseTest):
@@ -106,9 +108,33 @@ class TestCapture(BaseTest):
 
     @patch("posthog.models.team.TEAM_CACHE", {})
     @patch("posthog.tasks.process_event.process_event.delay")
-    def test_ignore_empty_request(self, patch_process_event):
+    def test_empty_request_returns_an_error(self, patch_process_event):
+        """
+        Empty requests that fail silently cause confusion as to whether they were successful or not.
+        """
+
+        # Empty GET
         response = self.client.get("/e/?data=", content_type="application/json", HTTP_ORIGIN="https://localhost",)
-        self.assertEqual(response.content, b"1")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {
+                "code": "validation",
+                "message": "No data found. Make sure to use a POST request when sending the payload in the body of the request.",
+            },
+        )
+        self.assertEqual(patch_process_event.call_count, 0)
+
+        # Empty POST
+        response = self.client.post("/e/", {}, content_type="application/json", HTTP_ORIGIN="https://localhost",)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {
+                "code": "validation",
+                "message": "No data found. Make sure to use a POST request when sending the payload in the body of the request.",
+            },
+        )
         self.assertEqual(patch_process_event.call_count, 0)
 
     @patch("posthog.models.team.TEAM_CACHE", {})
@@ -382,3 +408,9 @@ class TestCapture(BaseTest):
         timediff = arguments["sent_at"].timestamp() - tomorrow_sent_at.timestamp()
         self.assertLess(abs(timediff), 1)
         self.assertEqual(arguments["data"]["timestamp"], tomorrow.isoformat())
+
+    def test_incorrect_json(self):
+        response = self.client.post(
+            "/capture/", '{"event": "incorrect json with trailing comma",}', content_type="application/json"
+        )
+        self.assertEqual(response.json()["code"], "validation")

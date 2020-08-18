@@ -8,9 +8,18 @@ describe('Dashboards', () => {
         cy.get('h1').should('contain', 'Dashboards')
     })
 
-    it('Click on a dashboard', () => {
+    it('Share dashboard', () => {
         cy.get('[data-attr=dashboard-name-0]').click()
         cy.get('[data-attr=dashboard-item-0]').should('exist')
+
+        cy.get('[data-attr=dashboard-share-button]').click()
+        cy.get('[data-attr=share-dashboard-switch]').click()
+        cy.get('[data-attr=share-dashboard-link]')
+            .invoke('val')
+            .then((link) => {
+                cy.wait(500)
+                cy.visit(link)
+            })
     })
 
     it('Create dashboard', () => {
@@ -25,7 +34,7 @@ describe('Dashboards', () => {
         cy.get('[data-attr=dashboard-name-0]').click()
         cy.get('[data-attr=dashboard-item-0-dropdown]').click()
         cy.get('[data-attr=dashboard-item-0-dropdown-view]').click()
-        cy.location('pathname').should('include', '/trends')
+        cy.location('pathname').should('include', '/insights')
     })
 
     it('Rename dashboard item', () => {

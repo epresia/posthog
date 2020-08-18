@@ -1,26 +1,28 @@
-from django.http import HttpResponse, JsonResponse
-from django.views.decorators.http import require_http_methods
-from django.contrib.auth.password_validation import validate_password
-from django.contrib.auth import update_session_auth_hash
-from django.core.exceptions import ValidationError
-from django.shortcuts import redirect
-from django.conf import settings
-from rest_framework import serializers
-from posthog.models import Event, User
-import requests
-
-import urllib.parse
-import secrets
 import json
 import os
+import secrets
+import urllib.parse
+
 import posthoganalytics
+import requests
+from django.conf import settings
+from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import redirect
+from django.views.decorators.http import require_http_methods
+from rest_framework import serializers
+
+from posthog.models import Event, User
+from posthog.version import VERSION
 
 
 def user(request):
     if not request.user.is_authenticated:
         return HttpResponse("Unauthorized", status=401)
 
-    team = request.user.team_set.get()
+    team = request.user.team
 
     if request.method == "PATCH":
         data = json.loads(request.body)
@@ -73,7 +75,11 @@ def user(request):
                 "completed_snippet_onboarding": team.completed_snippet_onboarding,
             },
             "opt_out_capture": os.environ.get("OPT_OUT_CAPTURE"),
-            "posthog_version": settings.VERSION if hasattr(settings, "VERSION") else None,
+            "posthog_version": VERSION,
+            "available_features": request.user.available_features,
+            "billing_plan": request.user.billing_plan,
+            "is_multi_tenancy": hasattr(settings, "MULTI_TENANCY"),
+            "ee_available": request.user.ee_available,
         }
     )
 
@@ -92,11 +98,10 @@ def redirect_to_site(request):
     request.user.temporary_token = secrets.token_urlsafe(32)
     request.user.save()
     params = {
-        "action": "mpeditor",
+        "action": "ph_authorize",
         "token": team.api_token,
         "temporaryToken": request.user.temporary_token,
         "actionId": request.GET.get("actionId"),
-        "apiURL": request.build_absolute_uri("/"),
         "userIntent": request.GET.get("userIntent"),
     }
 
@@ -110,6 +115,7 @@ def redirect_to_site(request):
     if not settings.TEST and not os.environ.get("OPT_OUT_CAPTURE"):
         params["instrument"] = True
         params["userEmail"] = request.user.email
+        params["distinctId"] = request.user.distinct_id
 
     state = urllib.parse.quote(json.dumps(params))
 
@@ -165,7 +171,7 @@ def test_slack_webhook(request):
     webhook = body.get("webhook")
 
     if not webhook:
-        return JsonResponse({"error": "no webhook"})
+        return JsonResponse({"error": "no webhook URL"})
     message = {"text": "Greetings from PostHog!"}
     try:
         response = requests.post(webhook, verify=False, json=message)
@@ -175,10 +181,10 @@ def test_slack_webhook(request):
         else:
             return JsonResponse({"error": response.text})
     except:
-        return JsonResponse({"error": "invalid webhook url"})
+        return JsonResponse({"error": "invalid webhook URL"})
 
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "first_name", "email"]
+        fields = ["id", "distinct_id", "first_name", "email"]

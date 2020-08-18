@@ -1,12 +1,27 @@
-from django.conf import settings
-from django.db import models
-from django.contrib.auth.models import AbstractUser, BaseUserManager
-from typing import Union, Optional, List
-from django.utils.translation import ugettext_lazy as _
-
 import secrets
+from typing import List, Optional, Union
 
+from django.conf import settings
+from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.db import models
+from django.utils.timezone import now
+from django.utils.translation import ugettext_lazy as _
 from rest_framework.fields import BooleanField
+
+from posthog.models.team import Team
+
+EE_MISSING = False
+MULTI_TENANCY_MISSING = False
+try:
+    from ee.models.license import License
+except ImportError:
+    EE_MISSING = True
+
+try:
+    from multi_tenancy.models import TeamBilling  # type: ignore
+except ImportError:
+    TeamBilling = False
+    MULTI_TENANCY_MISSING = True
 
 
 def is_email_restricted_from_signup(email: str) -> bool:
@@ -48,8 +63,7 @@ class UserManager(BaseUserManager):
         """Create and save a regular User with the given email and password."""
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
-        if not settings.TEST:
-            extra_fields.setdefault("distinct_id", secrets.token_urlsafe(32))
+        extra_fields.setdefault("distinct_id", secrets.token_urlsafe(32))
         return self._create_user(email, password, **extra_fields)
 
     def create_superuser(self, email, password, **extra_fields):
@@ -80,10 +94,51 @@ class User(AbstractUser):
     email_opt_in: models.BooleanField = models.BooleanField(default=False, null=True, blank=True)
     anonymize_data: models.BooleanField = models.BooleanField(default=False, null=True, blank=True)
     toolbar_mode: models.CharField = models.CharField(
-        max_length=200, null=True, blank=True, choices=TOOLBAR_CHOICES, default=DEFAULT
+        max_length=200, null=True, blank=True, choices=TOOLBAR_CHOICES, default=TOOLBAR
     )
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS: List[str] = []
 
     objects: UserManager = UserManager()  # type: ignore
+
+    def feature_available(self, feature: str) -> bool:
+        return feature in self.available_features
+
+    @property
+    def ee_available(self) -> bool:
+        return not EE_MISSING
+
+    @property
+    def billing_plan(self) -> Optional[str]:
+        # If the EE folder is missing no features are available
+        if EE_MISSING:
+            return None
+
+        # If we're on multi-tenancy grab the team's price
+        if not MULTI_TENANCY_MISSING:
+            try:
+                return TeamBilling.objects.get(team=self.team).price_id
+            except TeamBilling.DoesNotExist:
+                return None
+        # Otherwise, try to find a valid license on this instance
+        license = License.objects.filter(valid_until__gte=now()).first()
+        if license:
+            return license.plan
+        return None
+
+    @property
+    def available_features(self) -> List[str]:
+        user_plan = self.billing_plan
+        if not user_plan:
+            return []
+        if user_plan not in License.PLANS:
+            return []
+        return License.PLANS[user_plan]
+
+    @property
+    def team(self) -> Team:
+        if hasattr(self, "_team"):
+            return self._team
+        self._team: Team = self.team_set.get()
+        return self._team

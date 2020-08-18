@@ -4,14 +4,19 @@ const path = require('path')
 const MiniCssExtractPlugin = require('mini-css-extract-plugin')
 const HtmlWebpackPlugin = require('html-webpack-plugin')
 const HtmlWebpackHarddiskPlugin = require('html-webpack-harddisk-plugin')
-const WebpackBar = require('webpackbar')
 
 const webpackDevServerHost = process.env.WEBPACK_HOT_RELOAD_HOST || '127.0.0.1'
 
 // main = app
 // toolbar = new toolbar
 // editor = old toolbar
-module.exports = () => [createEntry('main'), createEntry('toolbar'), createEntry('editor')]
+// shared_dashboard = publicly available dashboard
+module.exports = () => [
+    createEntry('main'),
+    createEntry('toolbar'),
+    createEntry('editor'),
+    createEntry('shared_dashboard'),
+]
 
 function createEntry(entry) {
     return {
@@ -23,9 +28,11 @@ function createEntry(entry) {
                 entry === 'main'
                     ? './frontend/src/index.tsx'
                     : entry === 'toolbar'
-                    ? './frontend/src/toolbar/index.js'
+                    ? './frontend/src/toolbar/index.tsx'
                     : entry === 'editor'
                     ? './frontend/src/editor/index.js'
+                    : entry === 'shared_dashboard'
+                    ? './frontend/src/scenes/dashboard/SharedDashboard.js'
                     : null,
         },
         watchOptions: {
@@ -38,6 +45,8 @@ function createEntry(entry) {
             publicPath:
                 process.env.NODE_ENV === 'production'
                     ? '/static/'
+                    : process.env.JS_URL
+                    ? `${process.env.JS_URL}${process.env.JS_URL.endsWith('/') ? '' : '/'}static/`
                     : process.env.IS_PORTER
                     ? `https://${process.env.PORTER_WEBPACK_HOST}/static/`
                     : `http${process.env.LOCAL_HTTPS ? 's' : ''}://${webpackDevServerHost}:8234/static/`,
@@ -48,6 +57,7 @@ function createEntry(entry) {
                 '~': path.resolve(__dirname, 'frontend', 'src'),
                 lib: path.resolve(__dirname, 'frontend', 'src', 'lib'),
                 scenes: path.resolve(__dirname, 'frontend', 'src', 'scenes'),
+                types: path.resolve(__dirname, 'frontend', 'types'),
                 ...(process.env.NODE_ENV !== 'production'
                     ? {
                           'react-dom': '@hot-loader/react-dom',
@@ -72,7 +82,7 @@ function createEntry(entry) {
                     // Loaders are applying from right to left(!)
                     // The first loader will be applied after others
                     use: [
-                        entry === 'main'
+                        entry === 'main' || entry === 'shared_dashboard'
                             ? {
                                   // After all CSS loaders we use plugin to do his work.
                                   // It gets all transformed CSS and extracts it into separate
@@ -152,11 +162,13 @@ function createEntry(entry) {
             hot: true,
             host: webpackDevServerHost,
             port: 8234,
-            noInfo: true,
             stats: 'minimal',
-            public: process.env.IS_PORTER
-                ? `https://${process.env.PORTER_WEBPACK_HOST}`
-                : `http${process.env.LOCAL_HTTPS ? 's' : ''}://${webpackDevServerHost}:8234`,
+            disableHostCheck: !!process.env.LOCAL_HTTPS,
+            public: process.env.JS_URL
+                ? new URL(process.env.JS_URL).host
+                : process.env.IS_PORTER
+                ? `${process.env.PORTER_WEBPACK_HOST}`
+                : `${webpackDevServerHost}:8234`,
             allowedHosts: process.env.IS_PORTER
                 ? [`${process.env.PORTER_WEBPACK_HOST}`, `${process.env.PORTER_SERVER_HOST}`]
                 : [],
@@ -167,7 +179,6 @@ function createEntry(entry) {
         },
         plugins: [
             // common plugins for all entrypoints
-            new WebpackBar(),
         ].concat(
             entry === 'main'
                 ? [
@@ -182,12 +193,27 @@ function createEntry(entry) {
                           title: 'PostHog',
                           template: path.join(__dirname, 'frontend', 'src', 'index.html'),
                       }),
+
                       new HtmlWebpackPlugin({
                           alwaysWriteToDisk: true,
                           title: 'PostHog',
                           filename: 'layout.html',
                           inject: false,
                           template: path.join(__dirname, 'frontend', 'src', 'layout.ejs'),
+                      }),
+                      new HtmlWebpackHarddiskPlugin(),
+                  ]
+                : entry === 'shared_dashboard'
+                ? [
+                      new MiniCssExtractPlugin({
+                          filename: '[name].css',
+                          ignoreOrder: true,
+                      }),
+                      new HtmlWebpackPlugin({
+                          alwaysWriteToDisk: true,
+                          title: 'PostHog',
+                          filename: 'shared_dashboard.html',
+                          template: path.join(__dirname, 'frontend', 'src', 'shared_dashboard.ejs'),
                       }),
                       new HtmlWebpackHarddiskPlugin(),
                   ]

@@ -1,9 +1,11 @@
-from posthog.api.test.base import BaseTest
-from posthog.models import Filter, Property, Event, Person, Element
-from django.db.models import Q
-from dateutil.relativedelta import relativedelta
-from django.utils import timezone
 import json
+
+from dateutil.relativedelta import relativedelta
+from django.db.models import Q
+from django.utils import timezone
+
+from posthog.api.test.base import BaseTest
+from posthog.models import Element, Event, Filter, Person, Property
 
 
 class TestFilter(BaseTest):
@@ -16,6 +18,18 @@ class TestFilter(BaseTest):
         self.assertEqual(filter.properties[1].key, "$OS")
         self.assertEqual(filter.properties[1].operator, None)
         self.assertEqual(filter.properties[1].value, "Mac")
+
+    def test_to_dict(self):
+        filter = Filter(
+            data={
+                "events": [{"id": "$pageview"}],
+                "display": "ActionsLineGraph",
+                "compare": True,
+                "interval": "",
+                "actions": [],
+            }
+        ).to_dict()
+        self.assertEqual(list(filter.keys()), ["events", "display", "compare"])
 
 
 class TestSelectors(BaseTest):
@@ -167,6 +181,7 @@ class TestPropertiesToQ(BaseTest):
         self.assertEqual(events[0], event1)
         self.assertEqual(len(events), 1)
 
+
 class TestDateFilterQ(BaseTest):
     def test_filter_by_all(self):
         filter = Filter(
@@ -178,7 +193,7 @@ class TestDateFilterQ(BaseTest):
                         "type": "person",
                     }
                 ],
-                "date_from": "all"
+                "date_from": "all",
             }
         )
         date_filter_query = filter.date_filter_Q

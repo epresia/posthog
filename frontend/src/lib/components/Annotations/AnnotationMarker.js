@@ -5,7 +5,7 @@ import { useValues } from 'kea'
 import { userLogic } from 'scenes/userLogic'
 import { Button, Popover, Row, Input, Checkbox, Tooltip } from 'antd'
 import { humanFriendlyDetailedTime } from '~/lib/utils'
-import { DeleteOutlined, PlusOutlined, GlobalOutlined } from '@ant-design/icons'
+import { DeleteOutlined, PlusOutlined, GlobalOutlined, CloseOutlined } from '@ant-design/icons'
 import _ from 'lodash'
 import { annotationsLogic } from './annotationsLogic'
 import moment from 'moment'
@@ -48,7 +48,7 @@ export function AnnotationMarker({
     const popupRef = useRef()
     const [focused, setFocused] = useState(false)
     const [textInput, setTextInput] = useState('')
-    const [applyAll, setApplyAll] = useState(false)
+    const [applyAll, setApplyAll] = useState(true)
     const [textAreaVisible, setTextAreaVisible] = useState(false)
     const [hovered, setHovered] = useState(false)
     const {
@@ -109,6 +109,7 @@ export function AnnotationMarker({
                             onChange={(e) => setTextInput(e.target.value)}
                         />
                         <Checkbox
+                            checked={applyAll}
                             onChange={(e) => {
                                 setApplyAll(e.target.checked)
                             }}
@@ -182,6 +183,7 @@ export function AnnotationMarker({
                         )}
                         {textAreaVisible && (
                             <Checkbox
+                                checked={applyAll}
                                 onChange={(e) => {
                                     setApplyAll(e.target.checked)
                                 }}
@@ -208,15 +210,6 @@ export function AnnotationMarker({
                         ) : (
                             <Row justify="end">
                                 <Button
-                                    style={{ marginRight: 10 }}
-                                    onClick={() => {
-                                        setFocused(false)
-                                        onClose?.()
-                                    }}
-                                >
-                                    Close
-                                </Button>
-                                <Button
                                     type="primary"
                                     onClick={() => {
                                         setTextAreaVisible(true)
@@ -230,11 +223,20 @@ export function AnnotationMarker({
                 )
             }
             title={
-                <Row justify="space-between" align="middle">
+                <Row justify="space-between" align="middle" style={{ lineHeight: '30px' }}>
                     {label}
+                    {focused && (
+                        <CloseOutlined
+                            className="clickable"
+                            onClick={() => {
+                                setFocused(false)
+                                onClose?.()
+                            }}
+                        />
+                    )}
                 </Row>
             }
-            visible={focused}
+            visible={focused || (!dynamic && hovered)}
         >
             <div
                 style={{
