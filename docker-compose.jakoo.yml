@@ -22,7 +22,6 @@ services:
       DATABASE_URL: 'postgres://posthog:posthog@db:5432/posthog'
       REDIS_URL: 'redis://redis:6379/'
       SECRET_KEY: '<randomly generated secret key>'
-      DEBUG: 'true'
       IS_BEHIND_PROXY: 'true'
     depends_on:
       - db
