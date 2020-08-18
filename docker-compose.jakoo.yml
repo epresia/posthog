@@ -9,20 +9,21 @@ services:
       POSTGRES_DB: posthog
       POSTGRES_PASSWORD: posthog
   redis:
-    image: "redis:alpine"
+    image: 'redis:alpine'
     container_name: posthog_redis_jakoo
   web:
-    image: posthog/posthog:latest
+    image: posthog/posthog:release-1.13.0
     container_name: posthog_web_jakoo
     ports:
-      - "8020:8000"
-      - "82:8000"
+      - '8020:8000'
+      - '82:8000'
     environment:
-      IS_DOCKER: "true"
-      DATABASE_URL: "postgres://posthog:posthog@db:5432/posthog"
-      REDIS_URL: "redis://redis:6379/"
-      SECRET_KEY: "<randomly generated secret key>"
-      IS_BEHIND_PROXY: "true"
+      IS_DOCKER: 'true'
+      DATABASE_URL: 'postgres://posthog:posthog@db:5432/posthog'
+      REDIS_URL: 'redis://redis:6379/'
+      SECRET_KEY: '<randomly generated secret key>'
+      DEBUG: 'true'
+      IS_BEHIND_PROXY: 'true'
     depends_on:
       - db
       - redis
