@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from posthog.models import Team, User
 
 from .base import BaseTest
@@ -15,30 +17,55 @@ class TestUser(BaseTest):
     def test_create_user_when_restricted(self):
         with self.settings(RESTRICT_SIGNUPS="posthog.com,uk.posthog.com"):
             with self.assertRaisesMessage(ValueError, "Can't sign up with this email"):
-                User.objects.create_user(email="tim@gmail.com")
+                User.objects.create_user(first_name="Tim Gmail", email="tim@gmail.com")
 
-            user = User.objects.create_user(email="tim@uk.posthog.com")
+            user = User.objects.create_user(first_name="Tim PostHog", email="tim@uk.posthog.com")
             self.assertEqual(user.email, "tim@uk.posthog.com")
 
     def test_create_user_with_distinct_id(self):
         with self.settings(TEST=False):
-            user = User.objects.create_user(email="tim@gmail.com")
+            user = User.objects.create_user(first_name="Tim", email="tim@gmail.com")
         self.assertNotEqual(user.distinct_id, "")
         self.assertNotEqual(user.distinct_id, None)
 
     def test_user_team_update(self):
         response = self.client.patch(
             "/api/user/",
-            data={"team": {"opt_out_capture": True, "anonymize_ips": False}},
+            data={"team": {"opt_out_capture": True, "anonymize_ips": False, "session_recording_opt_in": True}},
             content_type="application/json",
         ).json()
 
         self.assertEqual(response["team"]["opt_out_capture"], True)
         self.assertEqual(response["team"]["anonymize_ips"], False)
+        self.assertEqual(response["team"]["session_recording_opt_in"], True)
 
         team = Team.objects.get(id=self.team.id)
         self.assertEqual(team.opt_out_capture, True)
         self.assertEqual(team.anonymize_ips, False)
+        self.assertEqual(team.session_recording_opt_in, True)
+
+    @patch("secrets.token_urlsafe")
+    def test_user_team_update_signup_token(self, patch_token):
+        patch_token.return_value = "abcde"
+
+        # Make sure the endpoint works with and without the trailing slash
+        response = self.client.patch(
+            "/api/user", data={"team": {"signup_state": False}}, content_type="application/json",
+        ).json()
+
+        self.assertEqual(response["team"]["signup_token"], None)
+
+        team = Team.objects.get(id=self.team.id)
+        self.assertEqual(team.signup_token, None)
+
+        response = self.client.patch(
+            "/api/user/", data={"team": {"signup_state": True}}, content_type="application/json",
+        ).json()
+
+        self.assertEqual(response["team"]["signup_token"], "abcde")
+
+        team = Team.objects.get(id=self.team.id)
+        self.assertEqual(team.signup_token, "abcde")
 
 
 class TestUserChangePassword(BaseTest):
@@ -58,9 +85,9 @@ class TestUserChangePassword(BaseTest):
         self.assertEqual(response.json()["error"], "Incorrect old password")
 
     def test_change_password_invalid_new_password(self):
-        response = self.send_request({"oldPassword": self.TESTS_PASSWORD, "newPassword": "123451230"})
+        response = self.send_request({"oldPassword": self.TESTS_PASSWORD, "newPassword": "123456"})
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["error"], "This password is entirely numeric.")
+        self.assertEqual(response.json()["error"], "This password is too short. It must contain at least 8 characters.")
 
     def test_change_password_success(self):
         response = self.send_request({"oldPassword": self.TESTS_PASSWORD, "newPassword": "prettyhardpassword123456",})
@@ -91,7 +118,7 @@ class TestUserSlackWebhook(BaseTest):
 
 
 class TestLoginViews(BaseTest):
-    def test_redirect_to_setup_admin_when_no_users(self):
+    def test_redirect_to_preflight_when_no_users(self):
         User.objects.all().delete()
         response = self.client.get("/", follow=True)
-        self.assertRedirects(response, "/setup_admin")
+        self.assertRedirects(response, "/preflight")

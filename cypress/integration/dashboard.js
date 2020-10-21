@@ -1,7 +1,7 @@
 describe('Dashboards', () => {
     beforeEach(() => {
         cy.get('[data-attr=menu-item-dashboards]').click()
-        cy.location('pathname', { timeout: 6000 }).should('include', '/dashboard')
+        cy.location('pathname').should('include', '/dashboard')
     })
 
     it('Dashboards loaded', () => {
@@ -17,7 +17,7 @@ describe('Dashboards', () => {
         cy.get('[data-attr=share-dashboard-link]')
             .invoke('val')
             .then((link) => {
-                cy.wait(500)
+                cy.wait(200)
                 cy.visit(link)
             })
     })

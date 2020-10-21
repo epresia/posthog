@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import secrets
@@ -12,16 +13,16 @@ from django.core.exceptions import ValidationError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from django.views.decorators.http import require_http_methods
-from rest_framework import serializers
+from rest_framework import exceptions, serializers
 
+from posthog.auth import authenticate_secondarily
 from posthog.models import Event, User
 from posthog.version import VERSION
 
 
+# TODO: remake these endpoints with DRF!
+@authenticate_secondarily
 def user(request):
-    if not request.user.is_authenticated:
-        return HttpResponse("Unauthorized", status=401)
-
     team = request.user.team
 
     if request.method == "PATCH":
@@ -32,9 +33,16 @@ def user(request):
             team.opt_out_capture = data["team"].get("opt_out_capture", team.opt_out_capture)
             team.slack_incoming_webhook = data["team"].get("slack_incoming_webhook", team.slack_incoming_webhook)
             team.anonymize_ips = data["team"].get("anonymize_ips", team.anonymize_ips)
+            team.session_recording_opt_in = data["team"].get("session_recording_opt_in", team.session_recording_opt_in)
             team.completed_snippet_onboarding = data["team"].get(
-                "completed_snippet_onboarding", team.completed_snippet_onboarding
+                "completed_snippet_onboarding", team.completed_snippet_onboarding,
             )
+            # regenerate or disable team signup link
+            signup_state = data["team"].get("signup_state")
+            if signup_state == True:
+                team.signup_token = secrets.token_urlsafe(22)
+            elif signup_state == False:
+                team.signup_token = None
             team.save()
 
         if "user" in data:
@@ -48,6 +56,10 @@ def user(request):
                     "anonymize_data": request.user.anonymize_data,
                     "email": request.user.email if not request.user.anonymize_data else None,
                     "is_signed_up": True,
+                    "toolbar_mode": request.user.toolbar_mode,
+                    "billing_plan": request.user.billing_plan,
+                    "is_team_unique_user": (team.users.count() == 1),
+                    "team_setup_complete": (team.completed_snippet_onboarding and team.ingested_event),
                 },
             )
             request.user.save()
@@ -73,24 +85,23 @@ def user(request):
                 "event_properties": team.event_properties,
                 "event_properties_numerical": team.event_properties_numerical,
                 "completed_snippet_onboarding": team.completed_snippet_onboarding,
+                "session_recording_opt_in": team.session_recording_opt_in,
             },
             "opt_out_capture": os.environ.get("OPT_OUT_CAPTURE"),
             "posthog_version": VERSION,
             "available_features": request.user.available_features,
             "billing_plan": request.user.billing_plan,
-            "is_multi_tenancy": hasattr(settings, "MULTI_TENANCY"),
+            "is_multi_tenancy": getattr(settings, "MULTI_TENANCY", False),
             "ee_available": request.user.ee_available,
         }
     )
 
 
+@authenticate_secondarily
 def redirect_to_site(request):
-    if not request.user.is_authenticated:
-        return HttpResponse("Unauthorized", status=401)
-
-    team = request.user.team_set.get()
+    team = request.user.team
     app_url = request.GET.get("appUrl") or (team.app_urls and team.app_urls[0])
-    use_new_toolbar = request.user.toolbar_mode == "toolbar"
+    use_new_toolbar = request.user.toolbar_mode != "disabled"
 
     if not app_url:
         return HttpResponse(status=404)
@@ -103,14 +114,11 @@ def redirect_to_site(request):
         "temporaryToken": request.user.temporary_token,
         "actionId": request.GET.get("actionId"),
         "userIntent": request.GET.get("userIntent"),
+        "toolbarVersion": "toolbar",
     }
 
     if settings.JS_URL:
         params["jsURL"] = settings.JS_URL
-
-    if use_new_toolbar:
-        params["action"] = "ph_authorize"
-        params["toolbarVersion"] = "toolbar"
 
     if not settings.TEST and not os.environ.get("OPT_OUT_CAPTURE"):
         params["instrument"] = True
@@ -126,11 +134,9 @@ def redirect_to_site(request):
 
 
 @require_http_methods(["PATCH"])
+@authenticate_secondarily
 def change_password(request):
     """Change the password of a regular User."""
-    if not request.user.is_authenticated:
-        return JsonResponse({}, status=401)
-
     try:
         body = json.loads(request.body)
     except (TypeError, json.decoder.JSONDecodeError):
@@ -158,11 +164,9 @@ def change_password(request):
 
 
 @require_http_methods(["POST"])
+@authenticate_secondarily
 def test_slack_webhook(request):
     """Change the password of a regular User."""
-    if not request.user.is_authenticated:
-        return JsonResponse({}, status=401)
-
     try:
         body = json.loads(request.body)
     except (TypeError, json.decoder.JSONDecodeError):

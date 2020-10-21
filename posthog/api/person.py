@@ -1,18 +1,19 @@
 import json
-from typing import Union
+import warnings
+from typing import Any, Dict, List
 
 from django.core.cache import cache
-from django.db.models import Count, Func, OuterRef, Prefetch, Q, QuerySet, Subquery
+from django.db.models import Count, Func, Prefetch, Q, QuerySet
+from django_filters import rest_framework as filters
 from rest_framework import request, response, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.settings import api_settings
 from rest_framework_csv import renderers as csvrenderers  # type: ignore
 
-from posthog.models import Cohort, Event, Filter, Person, PersonDistinctId, Team
+from posthog.models import Event, Filter, Person, Team
 from posthog.utils import convert_property_value
 
 from .base import CursorPagination as BaseCursorPagination
-from .event import EventSerializer
 
 
 class PersonSerializer(serializers.HyperlinkedModelSerializer):
@@ -41,14 +42,28 @@ class CursorPagination(BaseCursorPagination):
     page_size = 100
 
 
+class PersonFilter(filters.FilterSet):
+    email = filters.CharFilter(field_name="properties__email")
+    distinct_id = filters.CharFilter(field_name="persondistinctid__distinct_id")
+    key_identifier = filters.CharFilter(method="key_identifier_filter")
+
+    def key_identifier_filter(self, queryset, attr, *args, **kwargs):
+        """
+        Filters persons by email or distinct ID
+        """
+        return queryset.filter(Q(persondistinctid__distinct_id=args[0]) | Q(properties__email=args[0]))
+
+
 class PersonViewSet(viewsets.ModelViewSet):
     renderer_classes = tuple(api_settings.DEFAULT_RENDERER_CLASSES) + (csvrenderers.PaginatedCSVRenderer,)
     queryset = Person.objects.all()
     serializer_class = PersonSerializer
     pagination_class = CursorPagination
+    filter_backends = [filters.DjangoFilterBackend]
+    filterset_class = PersonFilter
 
     def paginate_queryset(self, queryset):
-        if "text/csv" in self.request.accepted_media_type or not self.paginator:
+        if self.request.accepted_renderer.format == "csv" or not self.paginator:
             return None
         return self.paginator.paginate_queryset(queryset, self.request, view=self)
 
@@ -75,11 +90,20 @@ class PersonViewSet(viewsets.ModelViewSet):
                 Filter(data={"properties": json.loads(request.GET["properties"])}).properties_to_Q(team_id=team.pk)
             )
 
+        queryset_category_pass = None
+        category = request.query_params.get("category")
+        if category == "identified":
+            queryset_category_pass = queryset.filter
+        elif category == "anonymous":
+            queryset_category_pass = queryset.exclude
+        if queryset_category_pass is not None:
+            queryset = queryset_category_pass(is_identified=True)
+
         queryset = queryset.prefetch_related(Prefetch("persondistinctid_set", to_attr="distinct_ids_cache"))
         return queryset
 
     def destroy(self, request: request.Request, pk=None):  # type: ignore
-        team = request.user.team_set.get()
+        team = request.user.team
         person = Person.objects.get(team=team, pk=pk)
         events = Event.objects.filter(team=team, distinct_id__in=person.distinct_ids)
         events.delete()
@@ -88,17 +112,47 @@ class PersonViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        team = self.request.user.team_set.get()
+        team = self.request.user.team
         queryset = queryset.filter(team=team)
         return self._filter_request(self.request, queryset, team)
 
     @action(methods=["GET"], detail=False)
     def by_distinct_id(self, request):
+        """
+        DEPRECATED in favor of /api/person/?distinct_id={id}
+        """
+        warnings.warn(
+            "/api/person/by_distinct_id/ endpoint is deprecated; use /api/person/ instead.", DeprecationWarning,
+        )
+        result = self.get_by_distinct_id(request)
+        return response.Response(result)
+
+    def get_by_distinct_id(self, request):
         person = self.get_queryset().get(persondistinctid__distinct_id=str(request.GET["distinct_id"]))
-        return response.Response(PersonSerializer(person, context={"request": request}).data)
+        return PersonSerializer(person).data
+
+    @action(methods=["GET"], detail=False)
+    def by_email(self, request):
+        """
+        DEPRECATED in favor of /api/person/?email={email}
+        """
+        warnings.warn(
+            "/api/person/by_email/ endpoint is deprecated; use /api/person/ instead.", DeprecationWarning,
+        )
+        result = self.get_by_email(request)
+        return response.Response(result)
+
+    def get_by_email(self, request):
+        person = self.get_queryset().get(properties__email=str(request.GET["email"]))
+        return PersonSerializer(person).data
 
     @action(methods=["GET"], detail=False)
     def properties(self, request: request.Request) -> response.Response:
+        result = self.get_properties(request)
+
+        return response.Response(result)
+
+    def get_properties(self, request) -> List[Dict[str, Any]]:
         class JsonKeys(Func):
             function = "jsonb_object_keys"
 
@@ -106,8 +160,7 @@ class PersonViewSet(viewsets.ModelViewSet):
         people = (
             people.annotate(keys=JsonKeys("properties")).values("keys").annotate(count=Count("id")).order_by("-count")
         )
-
-        return response.Response([{"name": event["keys"], "count": event["count"]} for event in people])
+        return [{"name": event["keys"], "count": event["count"]} for event in people]
 
     @action(methods=["GET"], detail=False)
     def values(self, request: request.Request) -> response.Response:

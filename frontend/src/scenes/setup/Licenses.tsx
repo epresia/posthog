@@ -4,6 +4,7 @@ import { Alert, Form, Button, Table, Input } from 'antd'
 import { licenseLogic } from './licenseLogic'
 import { useValues, useActions } from 'kea'
 import { humanFriendlyDetailedTime } from 'lib/utils'
+import { CodeSnippet } from 'scenes/ingestion/frameworks/CodeSnippet'
 
 const columns = [
     {
@@ -25,7 +26,7 @@ const columns = [
     {
         title: 'Key',
         render: function renderActive(license: any) {
-            return <pre className="code">{license.key}</pre>
+            return <CodeSnippet>{license.key}</CodeSnippet>
         },
     },
     {
@@ -47,7 +48,7 @@ function _Licenses(): JSX.Element {
             <p style={{ maxWidth: 600 }}>
                 <i>
                     Here you can add and manage your PostHog enterprise licenses. By adding a license key, you'll be
-                    able to unluck enterprise functionality in PostHog right away!
+                    able to unlock enterprise functionality in PostHog right away!
                     <br />
                     <br />
                     Contact <a href="mailto:sales@posthog.com">sales@posthog.com</a> to buy a license.

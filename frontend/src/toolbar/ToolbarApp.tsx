@@ -1,5 +1,4 @@
 import React, { useRef } from 'react'
-import { dockLogic } from '~/toolbar/dockLogic'
 import { useSecondRender } from 'lib/hooks/useSecondRender'
 import root from 'react-shadow'
 import { ToolbarContainer } from '~/toolbar/ToolbarContainer'
@@ -12,7 +11,6 @@ export function ToolbarApp(props: EditorProps = {}): JSX.Element {
     useMountedLogic(toolbarLogic(props))
 
     const shadowRef = useRef(null as null | { shadowRoot: ShadowRoot })
-    useMountedLogic(dockLogic({ shadowRef }))
 
     // this runs after the shadow root has been added to the dom
     const didRender = useSecondRender(() => {
@@ -34,7 +32,7 @@ export function ToolbarApp(props: EditorProps = {}): JSX.Element {
 
     return (
         <>
-            <root.div id="__POSTHOG_TOOLBAR__" ref={shadowRef}>
+            <root.div id="__POSTHOG_TOOLBAR__" className="ph-no-capture" ref={shadowRef}>
                 <div id="posthog-toolbar-styles" />
                 {didRender ? <ToolbarContainer /> : null}
                 <ToastContainer autoClose={8000} transition={Slide} position="bottom-center" />

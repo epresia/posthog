@@ -1,8 +1,11 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Input, Button, Form, Switch, Slider } from 'antd'
 import { kea, useActions, useValues } from 'kea'
 import { slugify } from 'lib/utils'
 import { PropertyFilters } from 'lib/components/PropertyFilters/PropertyFilters'
+import { DeleteOutlined, SaveOutlined } from '@ant-design/icons'
+import { CodeSnippet } from 'scenes/ingestion/frameworks/CodeSnippet'
+import rrwebBlockClass from 'lib/utils/rrwebBlockClass'
 
 const editLogic = kea({
     actions: () => ({
@@ -26,40 +29,40 @@ const editLogic = kea({
 })
 
 function Snippet({ flagKey }) {
-    // Generated highlighted code html from http://hilite.me/ using the theme monokai
-    // Converted to jsx using https://magic.reactjs.net/htmltojsx.htm
     return (
-        <pre className="code" style={{ marginTop: '0.25rem' }}>
-            <span style={{ color: '#66d9ef' }}>if</span>
-            <span style={{ color: '#f8f8f2' }}>(</span>
-            <span style={{ color: '#a6e22e' }}>posthog</span>
-            <span style={{ color: '#f8f8f2' }}>.</span>
-            <span style={{ color: '#a6e22e' }}>isFeatureEnabled</span>
-            <span style={{ color: '#f8f8f2' }}>(</span>
-            <span style={{ color: '#e6db74' }}>'{flagKey}'</span>
-            <span style={{ color: '#f8f8f2' }}>))</span> <span style={{ color: '#f8f8f2' }}>{'{'}</span>
-            <br />
-            <span style={{ color: '#75715e' }}>{'  //'} do something</span>
-            <br />
-            <span style={{ color: '#f8f8f2' }}>{'}'}</span>
-        </pre>
+        <CodeSnippet language="javascript" wrap>
+            {`if (posthog.isFeatureEnabled('${flagKey ?? ''}')) {
+    // activate feature
+}`}
+        </CodeSnippet>
     )
 }
 
+const noop = () => {}
+
 export function EditFeatureFlag({ featureFlag, logic, isNew }) {
     const [form] = Form.useForm()
-    const { updateFeatureFlag, createFeatureFlag } = useActions(logic)
+    const { updateFeatureFlag, createFeatureFlag, deleteFeatureFlag } = useActions(logic)
 
     const _editLogic = editLogic({ featureFlag })
     const { filters, rollout_percentage } = useValues(_editLogic)
     const { setFilters, setRolloutPercentage } = useActions(_editLogic)
+    const [hasKeyChanged, setHasKeyChanged] = useState(false)
 
     let submitDisabled = rollout_percentage === null && (!filters?.properties || filters.properties.length === 0)
+
     return (
         <Form
             layout="vertical"
             form={form}
             initialValues={featureFlag}
+            onValuesChange={
+                !isNew
+                    ? (changedValues) => {
+                          if (changedValues.key) setHasKeyChanged(changedValues.key !== featureFlag.key)
+                      }
+                    : noop
+            }
             onFinish={(values) => {
                 const updatedFlag = { ...featureFlag, ...values, rollout_percentage, filters }
                 if (isNew) {
@@ -72,6 +75,7 @@ export function EditFeatureFlag({ featureFlag, logic, isNew }) {
             <Form.Item
                 name="name"
                 label="Name"
+                className={rrwebBlockClass}
                 rules={[
                     { required: true, message: 'Please give your feature flag a name, like "experimental feature".' },
                 ]}
@@ -83,7 +87,25 @@ export function EditFeatureFlag({ featureFlag, logic, isNew }) {
                 />
             </Form.Item>
 
-            <Form.Item name="key" label="Key" rules={[{ required: true }]}>
+            <Form.Item
+                name="key"
+                label="Key"
+                rules={[{ required: true }]}
+                validateStatus={!!rollout_percentage && hasKeyChanged ? 'warning' : ''}
+                help={
+                    !!rollout_percentage && hasKeyChanged ? (
+                        <small>
+                            Changing this key will
+                            <a href="https://posthog.com/docs/features/feature-flags#feature-flag-persistence">
+                                {' '}
+                                affect the persistence of your flag.
+                            </a>
+                        </small>
+                    ) : (
+                        ' '
+                    )
+                }
+            >
                 <Input data-attr="feature-flag-key" />
             </Form.Item>
 
@@ -91,7 +113,7 @@ export function EditFeatureFlag({ featureFlag, logic, isNew }) {
                 <Switch />
             </Form.Item>
 
-            <Form.Item label="Filter by user properties">
+            <Form.Item className={rrwebBlockClass} label="Filter by user properties">
                 <PropertyFilters
                     pageKey="feature-flag"
                     propertyFilters={filters?.properties}
@@ -121,9 +143,28 @@ export function EditFeatureFlag({ featureFlag, logic, isNew }) {
             </Form.Item>
 
             <Form.Item>
-                <Button disabled={submitDisabled} htmlType="submit" type="primary" data-attr="feature-flag-submit">
-                    Save feature flag
+                <Button
+                    disabled={submitDisabled}
+                    icon={<SaveOutlined />}
+                    htmlType="submit"
+                    type="primary"
+                    data-attr="feature-flag-submit"
+                >
+                    Save
                 </Button>
+                {!isNew && (
+                    <Button
+                        data-attr="delete-flag"
+                        className="float-right"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => {
+                            deleteFeatureFlag(featureFlag)
+                        }}
+                    >
+                        Delete
+                    </Button>
+                )}
             </Form.Item>
             <Form.Item shouldUpdate={(prevValues, currentValues) => prevValues.key !== currentValues.key}>
                 {({ getFieldValue }) => {

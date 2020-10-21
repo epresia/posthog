@@ -1,6 +1,8 @@
 venv
 env
+.venv
 *.pyc
+__pycache__/
 staticfiles
 .env
 settings.yml
@@ -25,3 +27,4 @@ yarn-error.log
 .yalc
 yalc.lock
 cypress/screenshots/*
+docker-compose.prod.yml

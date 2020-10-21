@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from celery.result import AsyncResult
 from dateutil.relativedelta import relativedelta
+from django.core.cache import cache
 from django.db import connection
 from django.db.models import (
     Avg,
@@ -26,14 +28,19 @@ from django.db.models import (
 )
 from django.db.models.expressions import RawSQL, Subquery
 from django.db.models.functions import Cast
+from django.db.models.signals import post_delete, post_save
+from django.dispatch import receiver
 from django.utils.timezone import now
 from rest_framework import authentication, request, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_hooks.signals import raw_hook_event
 
 from posthog.api.user import UserSerializer
+from posthog.auth import PersonalAPIKeyAuthentication, TemporaryTokenAuthentication
+from posthog.celery import update_cache_item_task
 from posthog.constants import TREND_FILTER_TYPE_ACTIONS, TREND_FILTER_TYPE_EVENTS, TRENDS_CUMULATIVE, TRENDS_STICKINESS
-from posthog.decorators import TRENDS_ENDPOINT, cached_function
+from posthog.decorators import FUNNEL_ENDPOINT, TRENDS_ENDPOINT, cached_function
 from posthog.models import (
     Action,
     ActionStep,
@@ -47,9 +54,9 @@ from posthog.models import (
     Team,
     User,
 )
-from posthog.queries import base, retention, stickiness, trends
+from posthog.queries import base, funnel, retention, stickiness, trends
 from posthog.tasks.calculate_action import calculate_action
-from posthog.utils import TemporaryTokenAuthentication, append_data, get_compare_period_dates
+from posthog.utils import generate_cache_key
 
 from .person import PersonSerializer
 
@@ -114,6 +121,7 @@ class ActionViewSet(viewsets.ModelViewSet):
     serializer_class = ActionSerializer
     authentication_classes = [
         TemporaryTokenAuthentication,
+        PersonalAPIKeyAuthentication,
         authentication.SessionAuthentication,
         authentication.BasicAuthentication,
     ]
@@ -122,12 +130,12 @@ class ActionViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
         if self.action == "list":  # type: ignore
             queryset = queryset.filter(deleted=False)
-        return get_actions(queryset, self.request.GET.dict(), self.request.user.team_set.get().pk)
+        return get_actions(queryset, self.request.GET.dict(), self.request.user.team.pk)
 
     def create(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
         action, created = Action.objects.get_or_create(
             name=request.data["name"],
-            team=request.user.team_set.get(),
+            team=request.user.team,
             deleted=False,
             defaults={"post_to_slack": request.data.get("post_to_slack", False), "created_by": request.user,},
         )
@@ -143,7 +151,7 @@ class ActionViewSet(viewsets.ModelViewSet):
         return Response(ActionSerializer(action, context={"request": request}).data)
 
     def update(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
-        action = Action.objects.get(pk=kwargs["pk"], team=request.user.team_set.get())
+        action = Action.objects.get(pk=kwargs["pk"], team=request.user.team)
 
         # If there's no steps property at all we just ignore it
         # If there is a step property but it's an empty array [], we'll delete all the steps
@@ -186,7 +194,7 @@ class ActionViewSet(viewsets.ModelViewSet):
 
     @cached_function(cache_type=TRENDS_ENDPOINT)
     def _calculate_trends(self, request: request.Request) -> List[Dict[str, Any]]:
-        team = request.user.team_set.get()
+        team = request.user.team
         filter = Filter(request=request)
         if filter.shown_as == "Stickiness":
             result = stickiness.Stickiness().run(filter, team)
@@ -195,13 +203,13 @@ class ActionViewSet(viewsets.ModelViewSet):
 
         dashboard_id = request.GET.get("from_dashboard", None)
         if dashboard_id:
-            DashboardItem.objects.filter(pk=dashboard_id).update(last_refresh=datetime.datetime.now())
+            DashboardItem.objects.filter(pk=dashboard_id).update(last_refresh=now())
 
         return result
 
     @action(methods=["GET"], detail=False)
     def retention(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
-        team = request.user.team_set.get()
+        team = request.user.team
         properties = request.GET.get("properties", "{}")
 
         filter = Filter(data={"properties": json.loads(properties)})
@@ -216,8 +224,43 @@ class ActionViewSet(viewsets.ModelViewSet):
         return Response({"data": result})
 
     @action(methods=["GET"], detail=False)
+    def funnel(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
+        team = request.user.team
+        refresh = request.GET.get("refresh", None)
+        dashboard_id = request.GET.get("from_dashboard", None)
+
+        filter = Filter(request=request)
+        cache_key = generate_cache_key("{}_{}".format(filter.toJSON(), team.pk))
+        result = {"loading": True}
+
+        if refresh:
+            cache.delete(cache_key)
+        else:
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                task_id = cached_result.get("task_id", None)
+                if not task_id:
+                    return Response(cached_result["result"])
+                else:
+                    return Response(result)
+
+        payload = {"filter": filter.toJSON(), "team_id": team.pk}
+        task = update_cache_item_task.delay(cache_key, FUNNEL_ENDPOINT, payload)
+        task_id = task.id
+        cache.set(cache_key, {"task_id": task_id}, 180)  # task will be live for 3 minutes
+
+        if dashboard_id:
+            DashboardItem.objects.filter(pk=dashboard_id).update(last_refresh=now())
+
+        return Response(result)
+
+    @action(methods=["GET"], detail=False)
     def people(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
-        team = request.user.team_set.get()
+        result = self.get_people(request)
+        return Response(result)
+
+    def get_people(self, request: request.Request) -> Union[Dict[str, Any], List]:
+        team = request.user.team
         filter = Filter(request=request)
         offset = int(request.GET.get("offset", 0))
 
@@ -280,7 +323,7 @@ class ActionViewSet(viewsets.ModelViewSet):
                 try:
                     action = actions.get(pk=entity.id)
                 except Action.DoesNotExist:
-                    return Response([])
+                    return []
                 filtered_events = base.process_entity_for_events(entity, team_id=team.pk, order_by=None).filter(
                     base.filter_events(team.pk, filter, entity)
                 )
@@ -300,9 +343,22 @@ class ActionViewSet(viewsets.ModelViewSet):
         else:
             next_url = None
 
-        return Response({"results": [people], "next": next_url, "previous": current_url[1:]})
+        return {"results": [people], "next": next_url, "previous": current_url[1:]}
 
 
 def serialize_people(people: QuerySet, request: request.Request) -> Dict:
     people_dict = [PersonSerializer(person, context={"request": request}).data for person in people]
     return {"people": people_dict, "count": len(people_dict)}
+
+
+@receiver(post_save, sender=Action, dispatch_uid="hook-action-defined")
+def action_defined(sender, instance, created, raw, using, **kwargs):
+    """Trigger action_defined hooks on Action creation."""
+    if created:
+        raw_hook_event.send(
+            sender=None,
+            event_name="action_defined",
+            instance=instance,
+            payload=ActionSerializer(instance).data,
+            user=instance.team,
+        )

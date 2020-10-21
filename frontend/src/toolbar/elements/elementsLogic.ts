@@ -3,13 +3,14 @@ import { kea } from 'kea'
 import { actionsLogic } from '~/toolbar/actions/actionsLogic'
 import { heatmapLogic } from '~/toolbar/elements/heatmapLogic'
 import { elementToActionStep, getAllClickTargets, getElementForStep, getRectForElement } from '~/toolbar/utils'
-import { dockLogic } from '~/toolbar/dockLogic'
-import { toolbarTabLogic } from '~/toolbar/toolbarTabLogic'
 import { actionsTabLogic } from '~/toolbar/actions/actionsTabLogic'
 import { toolbarButtonLogic } from '~/toolbar/button/toolbarButtonLogic'
 import { elementsLogicType } from 'types/toolbar/elements/elementsLogicType'
 import { ActionStepType, ActionType, ToolbarMode, ToolbarTab } from '~/types'
 import { ActionElementWithMetadata, ActionForm, ElementWithMetadata } from '~/toolbar/types'
+import { currentPageLogic } from '~/toolbar/stats/currentPageLogic'
+import { toolbarLogic } from '~/toolbar/toolbarLogic'
+import { collectAllElementsDeep } from '@mariusandra/query-selector-shadow-dom'
 
 type ActionElementMap = Map<HTMLElement, ActionElementWithMetadata[]>
 type ElementMap = Map<HTMLElement, ElementWithMetadata>
@@ -61,7 +62,6 @@ export const elementsLogic = kea<
                 enableInspect: () => null,
                 disableInspect: () => null,
                 createAction: () => null,
-                [toolbarTabLogic.actionTypes.setTab]: () => null,
             },
         ],
         highlightElement: [
@@ -73,7 +73,6 @@ export const elementsLogic = kea<
                 selectElement: () => null,
                 disableInspect: () => null,
                 createAction: () => null,
-                [toolbarTabLogic.actionTypes.setTab]: () => null,
             },
         ],
         selectedElement: [
@@ -82,7 +81,6 @@ export const elementsLogic = kea<
                 setSelectedElement: (_, { element }) => element,
                 disableInspect: () => null,
                 createAction: () => null,
-                [toolbarTabLogic.actionTypes.setTab]: () => null,
                 [heatmapLogic.actionTypes.disableHeatmap]: () => null,
                 [actionsTabLogic.actionTypes.selectAction]: () => null,
             },
@@ -100,40 +98,29 @@ export const elementsLogic = kea<
     selectors: {
         inspectEnabled: [
             (s) => [
-                dockLogic.selectors.mode,
                 s.inspectEnabledRaw,
-                toolbarTabLogic.selectors.tab,
                 actionsTabLogic.selectors.inspectingElement,
                 actionsTabLogic.selectors.buttonActionsVisible,
             ],
-            (mode, inpsectEnabledRaw, tab, inspectingElement, buttonActionsVisible) =>
-                mode === 'dock'
-                    ? tab === 'stats'
-                        ? inpsectEnabledRaw
-                        : tab === 'actions'
-                        ? inspectingElement !== null
-                        : false
-                    : inpsectEnabledRaw || (buttonActionsVisible && inspectingElement !== null),
+            (inpsectEnabledRaw, inspectingElement, buttonActionsVisible) =>
+                inpsectEnabledRaw || (buttonActionsVisible && inspectingElement !== null),
         ],
 
-        heatmapEnabled: [
-            () => [heatmapLogic.selectors.heatmapEnabled, toolbarTabLogic.selectors.tab],
-            (heatmapEnabled, tab) => heatmapEnabled && tab === 'stats',
-        ],
+        heatmapEnabled: [() => [heatmapLogic.selectors.heatmapEnabled], (heatmapEnabled) => heatmapEnabled],
 
         heatmapElements: [
-            (s) => [heatmapLogic.selectors.countedElements, s.rectUpdateCounter, dockLogic.selectors.isAnimating],
+            (s) => [heatmapLogic.selectors.countedElements, s.rectUpdateCounter, toolbarLogic.selectors.buttonVisible],
             (countedElements) =>
                 countedElements.map((e) => ({ ...e, rect: getRectForElement(e.element) } as ElementWithMetadata)),
         ],
 
         allInspectElements: [
-            (s) => [s.inspectEnabled],
+            (s) => [s.inspectEnabled, currentPageLogic.selectors.href],
             (inspectEnabled) => (inspectEnabled ? getAllClickTargets() : []),
         ],
 
         inspectElements: [
-            (s) => [s.allInspectElements, s.rectUpdateCounter, dockLogic.selectors.isAnimating],
+            (s) => [s.allInspectElements, s.rectUpdateCounter, toolbarLogic.selectors.buttonVisible],
             (allInspectElements) =>
                 allInspectElements
                     .map((element) => ({ element, rect: getRectForElement(element) } as ElementWithMetadata))
@@ -141,21 +128,18 @@ export const elementsLogic = kea<
         ],
 
         displayActionElements: [
-            () => [
-                dockLogic.selectors.mode,
-                toolbarTabLogic.selectors.tab,
-                actionsTabLogic.selectors.buttonActionsVisible,
-            ],
-            (mode, tab, buttonActionsVisible) => (mode === 'button' ? buttonActionsVisible : tab === 'actions'),
+            () => [actionsTabLogic.selectors.buttonActionsVisible],
+            (buttonActionsVisible) => buttonActionsVisible,
         ],
 
         allActionElements: [
             (s) => [s.displayActionElements, actionsTabLogic.selectors.selectedEditedAction],
             (displayActionElements, selectedEditedAction): ElementWithMetadata[] => {
                 if (displayActionElements && selectedEditedAction?.steps) {
+                    const allElements = collectAllElementsDeep('', document, null)
                     const steps: ElementWithMetadata[] = []
                     selectedEditedAction.steps.forEach((step, index) => {
-                        const element = getElementForStep(step)
+                        const element = getElementForStep(step, allElements)
                         if (element) {
                             steps.push({
                                 element,
@@ -169,7 +153,7 @@ export const elementsLogic = kea<
         ],
 
         actionElements: [
-            (s) => [s.allActionElements, s.rectUpdateCounter, dockLogic.selectors.isAnimating],
+            (s) => [s.allActionElements, s.rectUpdateCounter, toolbarLogic.selectors.buttonVisible],
             (allActionElements) =>
                 allActionElements.map((element) =>
                     element.element ? { ...element, rect: getRectForElement(element.element) } : element
@@ -203,14 +187,15 @@ export const elementsLogic = kea<
         ],
 
         actionsForElementMap: [
-            (s) => [actionsLogic.selectors.sortedActions, s.rectUpdateCounter, dockLogic.selectors.isAnimating],
+            (s) => [actionsLogic.selectors.sortedActions, s.rectUpdateCounter, toolbarLogic.selectors.buttonVisible],
             (sortedActions): ActionElementMap => {
+                const allElements = collectAllElementsDeep('', document, null)
                 const actionsForElementMap = new Map<HTMLElement, ActionElementWithMetadata[]>()
                 sortedActions.forEach((action, index) => {
                     action.steps
                         ?.filter((step) => step.event === '$autocapture')
                         .forEach((step) => {
-                            const element = getElementForStep(step)
+                            const element = getElementForStep(step, allElements)
                             if (element) {
                                 const rect = getRectForElement(element)
                                 let array = actionsForElementMap.get(element)
@@ -390,9 +375,7 @@ export const elementsLogic = kea<
         },
         selectElement: ({ element }) => {
             const inpsectForAction =
-                (dockLogic.values.mode === 'dock'
-                    ? toolbarTabLogic.values.tab === 'actions'
-                    : actionsTabLogic.values.buttonActionsVisible) && actionsTabLogic.values.inspectingElement !== null
+                actionsTabLogic.values.buttonActionsVisible && actionsTabLogic.values.inspectingElement !== null
 
             if (inpsectForAction) {
                 actions.setHoverElement(null)
@@ -404,13 +387,9 @@ export const elementsLogic = kea<
             }
         },
         createAction: ({ element }) => {
-            if (dockLogic.values.mode === 'button') {
-                actionsTabLogic.actions.showButtonActions()
-                toolbarButtonLogic.actions.showActionsInfo()
-                elementsLogic.actions.selectElement(null)
-            } else {
-                toolbarTabLogic.actions.setTab('actions')
-            }
+            actionsTabLogic.actions.showButtonActions()
+            toolbarButtonLogic.actions.showActionsInfo()
+            elementsLogic.actions.selectElement(null)
             actionsTabLogic.actions.newAction(element)
         },
     }),

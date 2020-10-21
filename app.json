@@ -6,10 +6,10 @@
     "environments": {
         "review": {
             "scripts": {
-                "postdeploy": ""
+                "postdeploy": "python manage.py setup_dev"
             },
             "env": {
-                "DEBUG": true
+                "SELF_CAPTURE": true
             },
             "buildpacks": [
                 { "url": "heroku/nodejs" },

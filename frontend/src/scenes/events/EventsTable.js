@@ -1,11 +1,10 @@
 import React from 'react'
 import { useActions, useValues } from 'kea'
 import moment from 'moment'
-
 import { PropertyFilters } from 'lib/components/PropertyFilters/PropertyFilters'
-
+import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { EventDetails } from 'scenes/events/EventDetails'
-import { SearchOutlined } from '@ant-design/icons'
+import { ExportOutlined, SearchOutlined } from '@ant-design/icons'
 import { Link } from 'lib/components/Link'
 import { Button, Spin, Table, Tooltip } from 'antd'
 import { router } from 'kea-router'
@@ -13,14 +12,32 @@ import { FilterPropertyLink } from 'lib/components/FilterPropertyLink'
 import { Property } from 'lib/components/Property'
 import { EventName } from 'scenes/actions/EventName'
 
-import { eventToName } from 'lib/utils'
+import { eventToName, toParams } from 'lib/utils'
 
-export function EventsTable({ fixedFilters, filtersEnabled = true, logic, isLiveActions }) {
-    const { properties, eventsFormatted, isLoading, hasNext, isLoadingNext, newEvents, eventFilter } = useValues(logic)
+import rrwebBlockClass from 'lib/utils/rrwebBlockClass'
+
+export function EventsTable({
+    fixedFilters,
+    filtersEnabled = true,
+    logic,
+    isLiveActions = false,
+    isPersonPage = false,
+}) {
+    const {
+        properties,
+        eventsFormatted,
+        orderBy,
+        isLoading,
+        hasNext,
+        isLoadingNext,
+        newEvents,
+        eventFilter,
+    } = useValues(logic)
     const { fetchNextEvents, prependNewEvents, setEventFilter } = useActions(logic)
     const {
         location: { search },
     } = useValues(router)
+    const { featureFlags } = useValues(featureFlagLogic)
 
     const showLinkToPerson = !fixedFilters?.person_id
     let columns = [
@@ -81,7 +98,10 @@ export function EventsTable({ fixedFilters, filtersEnabled = true, logic, isLive
             render: function renderPerson({ event }) {
                 if (!event) return { props: { colSpan: 0 } }
                 return showLinkToPerson ? (
-                    <Link to={`/person/${encodeURIComponent(event.distinct_id)}${search}`} className="ph-no-capture">
+                    <Link
+                        to={`/person/${encodeURIComponent(event.distinct_id)}${search}`}
+                        className={'ph-no-capture ' + rrwebBlockClass}
+                    >
                         {event.person}
                     </Link>
                 ) : (
@@ -97,7 +117,12 @@ export function EventsTable({ fixedFilters, filtersEnabled = true, logic, isLive
                 let param = event.properties['$current_url'] ? '$current_url' : '$screen_name'
                 if (filtersEnabled)
                     return (
-                        <FilterPropertyLink property={param} value={event.properties[param]} filters={{ properties }} />
+                        <FilterPropertyLink
+                            className={'ph-no-capture ' + rrwebBlockClass}
+                            property={param}
+                            value={event.properties[param]}
+                            filters={{ properties }}
+                        />
                     )
                 return <Property value={event.properties[param]} />
             },
@@ -136,14 +161,37 @@ export function EventsTable({ fixedFilters, filtersEnabled = true, logic, isLive
 
     return (
         <div className="events" data-attr="events-table">
-            <h1 className="page-header">Events</h1>
+            <h1 className="page-header">
+                {isLiveActions
+                    ? 'Live Actions'
+                    : isPersonPage
+                    ? ''
+                    : !featureFlags['actions-ux-201012']
+                    ? 'Events'
+                    : 'Raw Events Stream'}
+            </h1>
             {filtersEnabled ? <PropertyFilters pageKey={isLiveActions ? 'LiveActionsTable' : 'EventsTable'} /> : null}
+            <Tooltip title="Up to 100,000 latest events.">
+                <Button
+                    type="default"
+                    icon={<ExportOutlined />}
+                    href={`/api/event.csv?${toParams({
+                        properties,
+                        ...(fixedFilters || {}),
+                        ...(eventFilter ? { event: eventFilter } : {}),
+                        orderBy: [orderBy],
+                    })}`}
+                    style={{ marginBottom: '1rem' }}
+                >
+                    Export
+                </Button>
+            </Tooltip>
             <Table
                 dataSource={eventsFormatted}
                 loading={isLoading}
                 columns={columns}
                 size="small"
-                className="ph-no-capture"
+                className={rrwebBlockClass + ' ph-no-capture'}
                 locale={{
                     emptyText: (
                         <span>
@@ -155,7 +203,7 @@ export function EventsTable({ fixedFilters, filtersEnabled = true, logic, isLive
                 pagination={{ pageSize: 99999, hideOnSinglePage: true }}
                 rowKey={(row) => (row.event ? row.event.id + '-' + row.event.actionId : row.date_break)}
                 rowClassName={(row) => {
-                    if (row.event) return 'event-row'
+                    if (row.event) return 'event-row ' + (row.event.event === '$exception' && 'event-row-is-exception')
                     if (row.date_break) return 'event-day-separator'
                     if (row.new_events) return 'event-row-new'
                 }}

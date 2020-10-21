@@ -9,7 +9,22 @@ export interface UserType {
     opt_out_capture: null
     posthog_version: string
     team: TeamType
-    toolbar_mode: string
+    toolbar_mode: 'disabled' | 'toolbar'
+    billing: OrganizationBilling
+}
+
+export interface UserUpdateType extends Omit<Partial<UserType>, 'team'> {
+    team: Partial<TeamType>
+}
+
+export interface PersonalAPIKeyType {
+    id: string
+    label: string
+    value?: string
+    created_at: string
+    last_used_at: string
+    team_id: number
+    user_id: string
 }
 
 export interface TeamType {
@@ -19,9 +34,11 @@ export interface TeamType {
     completed_snippet_onboarding: boolean
     event_names: string[]
     event_properties: string[]
+    event_properties_numerical: string[]
     opt_out_capture: boolean
     signup_token: string
     slack_incoming_webhook: string
+    session_recording_opt_in: boolean
 }
 
 export interface ActionType {
@@ -72,6 +89,98 @@ export type EditorProps = {
     actionId?: number
     userIntent?: ToolbarUserIntent
     instrument?: boolean
-    distinctId?: boolean
+    distinctId?: string
     userEmail?: boolean
+}
+
+export interface PropertyFilter {
+    key: string
+    operator: string | null
+    type: string
+    value: string | number
+}
+
+export interface Entity {
+    id: string | number
+    name: string
+    order: number
+    type: string
+}
+
+export interface CohortType {
+    count?: number
+    created_by?: Record<string, any>
+    created_at?: string
+    deleted?: boolean
+    id: number
+    is_calculating?: boolean
+    last_calculation?: string
+    name?: string
+    groups?: Record<string, any>[]
+}
+
+export interface InsightHistory {
+    id: number
+    type: string
+    filters: Record<string, any>
+    name?: string
+    createdAt: string
+    saved: boolean
+}
+
+export interface SavedFunnel extends InsightHistory {
+    created_by: string
+}
+
+export interface EventType {
+    elements: ElementType[]
+    elements_hash: string | null
+    event: string
+    id: number
+    properties: Record<string, any>
+    timestamp: string
+}
+
+export interface SessionType {
+    distinct_id: string
+    event_count: number
+    events: EventType[]
+    global_session_id: string
+    length: number
+    properties: Record<string, any>
+    start_time: string
+}
+
+export interface OrganizationBilling {
+    plan: PlanInterface
+    current_usage: { value: number; formatted: string } | null
+    should_setup_billing: boolean
+    stripe_checkout_session: string
+    subscription_url: string
+}
+
+export interface PlanInterface {
+    key: string
+    name: string
+    custom_setup_billing_message: string
+    image_url: string
+    self_serve: boolean
+    allowance: null | Record<string, string | number>
+}
+
+export interface BillingSubscription {
+    subscription_url: string
+    stripe_checkout_session: string
+}
+
+export interface DashboardType {
+    id: number
+    name: string
+    pinned: string
+    items: []
+    created_at: string
+    created_by: number
+    is_shared: boolean
+    share_token: string
+    deleted: boolean
 }
