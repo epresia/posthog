@@ -12,7 +12,7 @@ services:
     image: 'redis:alpine'
     container_name: posthog_redis_epresia
   web:
-    image: posthog/posthog:release-1.13.0
+    image: posthog/posthog:latest
     container_name: posthog_web_epresia
     ports:
       - '8010:8000'
