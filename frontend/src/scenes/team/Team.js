@@ -5,6 +5,7 @@ import { Table, Modal } from 'antd'
 import { useValues, useActions } from 'kea'
 import { teamLogic } from './teamLogic'
 import { DeleteOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
+import rrwebBlockClass from 'lib/utils/rrwebBlockClass'
 
 function Team({ user }) {
     const logic = teamLogic()
@@ -60,19 +61,19 @@ function Team({ user }) {
             dataIndex: 'email',
             key: 'email',
         },
-        {
+        /*{
             title: '',
             dataIndex: 'actions',
             key: 'actions',
             align: 'center',
             render: ActionsComponent,
-        },
+        },*/
     ]
 
     return (
         <>
             <h1 className="page-header">Team</h1>
-            <div style={{ maxWidth: 600 }}>
+            <div style={{ maxWidth: 672 }}>
                 <i>
                     <p>This is you and all your teammates. Manage them from here.</p>
                     <TeamInvitationContent user={user} />
@@ -84,7 +85,12 @@ function Team({ user }) {
                         <Spin />
                     </Row>
                 ) : (
-                    <Table dataSource={userDataMarked} columns={columns} rowKey="distinct_id" />
+                    <Table
+                        dataSource={userDataMarked}
+                        className={rrwebBlockClass}
+                        columns={columns}
+                        rowKey="distinct_id"
+                    />
                 )}
             </div>
         </>

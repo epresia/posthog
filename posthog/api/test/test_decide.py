@@ -2,7 +2,7 @@ import base64
 import json
 from unittest.mock import patch
 
-from posthog.models import FeatureFlag, Person
+from posthog.models import FeatureFlag, Person, PersonalAPIKey
 
 from .base import BaseTest
 
@@ -12,6 +12,13 @@ class TestDecide(BaseTest):
 
     def _dict_to_b64(self, data: dict) -> str:
         return base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
+
+    def _post_decide(self, data=None, origin="http://127.0.0.1:8000"):
+        return self.client.post(
+            "/decide/",
+            {"data": self._dict_to_b64(data or {"token": self.team.api_token, "distinct_id": "example_id"})},
+            HTTP_ORIGIN=origin,
+        ).json()
 
     def test_user_on_own_site_enabled(self):
         user = self.team.users.all()[0]
@@ -26,12 +33,14 @@ class TestDecide(BaseTest):
 
     def test_user_on_own_site_disabled(self):
         user = self.team.users.all()[0]
-        user.toolbar_mode = "default"
+        user.toolbar_mode = "disabled"
         user.save()
 
         self.team.app_urls = ["https://example.com/maybesubdomain"]
         self.team.save()
-        response = self.client.get("/decide/", HTTP_ORIGIN="https://example.com").json()
+
+        # Make sure the endpoint works with and without the trailing slash
+        response = self.client.get("/decide", HTTP_ORIGIN="https://example.com").json()
         self.assertEqual(response["isAuthenticated"], True)
         self.assertIsNone(response.get("toolbarVersion", None))
 
@@ -53,11 +62,29 @@ class TestDecide(BaseTest):
 
         self.team.app_urls = ["https://example.com"]
         self.team.save()
-        response = self.client.get("/decide/", HTTP_ORIGIN="http://127.0.0.1:8000").json()
+        response = self.client.get("/decide", HTTP_ORIGIN="http://127.0.0.1:8000").json()
         self.assertEqual(response["isAuthenticated"], True)
+        self.assertEqual(response["sessionRecording"], False)
         self.assertEqual(response["editorParams"]["toolbarVersion"], "toolbar")
 
-    @patch("posthog.models.team.TEAM_CACHE", {})
+    def test_user_session_recording_opt_in(self):
+        # :TRICKY: Test for regression around caching
+        response = self._post_decide()
+        self.assertEqual(response["sessionRecording"], False)
+
+        self.team.session_recording_opt_in = True
+        self.team.save()
+
+        response = self._post_decide()
+        self.assertEqual(response["sessionRecording"], True)
+
+    def test_user_session_recording_evil_site(self):
+        self.team.session_recording_opt_in = True
+        self.team.save()
+
+        response = self._post_decide(origin="evil.site.com")
+        self.assertEqual(response["sessionRecording"], False)
+
     def test_feature_flags(self):
         self.team.app_urls = ["https://example.com"]
         self.team.save()
@@ -85,17 +112,19 @@ class TestDecide(BaseTest):
             created_by=self.user,
         )
         with self.assertNumQueries(4):
-            response = self.client.post(
-                "/decide/",
-                {"data": self._dict_to_b64({"token": self.team.api_token, "distinct_id": "example_id"})},
-                HTTP_ORIGIN="http://127.0.0.1:8000",
-            ).json()
+            response = self._post_decide()
         self.assertEqual(response["featureFlags"][0], "beta-feature")
 
-        with self.assertNumQueries(3):  # Caching of teams saves 1 query
-            response = self.client.post(
-                "/decide/",
-                {"data": self._dict_to_b64({"token": self.team.api_token, "distinct_id": "another_id"})},
-                HTTP_ORIGIN="http://127.0.0.1:8000",
-            ).json()
+        with self.assertNumQueries(4):
+            response = self._post_decide({"token": self.team.api_token, "distinct_id": "another_id"})
         self.assertEqual(len(response["featureFlags"]), 0)
+
+    def test_feature_flags_with_personal_api_key(self):
+        key = PersonalAPIKey(label="X", user=self.user, team=self.team)
+        key.save()
+        Person.objects.create(team=self.team, distinct_ids=["example_id"])
+        FeatureFlag.objects.create(
+            team=self.team, rollout_percentage=100, name="Test", key="test", created_by=self.user,
+        )
+        response = self._post_decide({"distinct_id": "example_id", "personal_api_key": key.value})
+        self.assertEqual(len(response["featureFlags"]), 1)

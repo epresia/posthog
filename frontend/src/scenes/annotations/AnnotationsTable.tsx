@@ -2,11 +2,11 @@ import React, { useState, useEffect, HTMLAttributes } from 'react'
 import { useValues, useActions } from 'kea'
 import { Table, Tag, Button, Modal, Input, DatePicker, Row, Spin } from 'antd'
 import { Link } from 'lib/components/Link'
-import 'lib/components/Annotations/AnnotationMarker.scss'
 import { humanFriendlyDetailedTime } from 'lib/utils'
 import moment from 'moment'
 import { annotationsModel } from '~/models/annotationsModel'
 import { DeleteOutlined, RedoOutlined } from '@ant-design/icons'
+import rrwebBlockClass from 'lib/utils/rrwebBlockClass'
 
 const { TextArea } = Input
 
@@ -51,7 +51,10 @@ export function AnnotationsTable(props: Props): JSX.Element {
                 const { created_by } = annotation
 
                 return (
-                    <Link to={`/person/${encodeURIComponent(created_by.id)}`} className="ph-no-capture">
+                    <Link
+                        to={`/person/${encodeURIComponent(created_by.id)}`}
+                        className={rrwebBlockClass + ' ph-no-capture'}
+                    >
                         {created_by?.name || created_by?.email}
                     </Link>
                 )
@@ -79,7 +82,11 @@ export function AnnotationsTable(props: Props): JSX.Element {
         {
             title: 'Type',
             render: function RenderType(annotation): JSX.Element {
-                return annotation.apply_all ? <Tag color="blue">Global</Tag> : <Tag color="purple">Dashboard Item</Tag>
+                return annotation.scope !== 'dashboard_item' ? (
+                    <Tag color="blue">Global</Tag>
+                ) : (
+                    <Tag color="purple">Dashboard Item</Tag>
+                )
             },
         },
     ]
@@ -221,14 +228,14 @@ function CreateAnnotationModal(props: CreateAnnotationModalProps): JSX.Element {
                     <span>Change existing annotation text</span>
                     {!props.annotation?.deleted ? (
                         <DeleteOutlined
-                            className="clickable"
+                            className="button-border clickable"
                             onClick={(): void => {
                                 props.onDelete()
                             }}
                         />
                     ) : (
                         <RedoOutlined
-                            className="clickable"
+                            className="button-border clickable"
                             onClick={(): void => {
                                 props.onRestore()
                             }}

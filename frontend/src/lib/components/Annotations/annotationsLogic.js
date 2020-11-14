@@ -1,8 +1,7 @@
 import { kea } from 'kea'
 import api from 'lib/api'
 import moment from 'moment'
-import _ from 'lodash'
-import { determineDifferenceType, deleteWithUndo, toParams } from '~/lib/utils'
+import { determineDifferenceType, deleteWithUndo, toParams, groupBy } from '~/lib/utils'
 import { annotationsModel } from '~/models/annotationsModel'
 import { getNextKey } from './utils'
 
@@ -13,17 +12,17 @@ export const annotationsLogic = kea({
         values: [annotationsModel, ['activeGlobalAnnotations']],
     },
     actions: () => ({
-        createAnnotation: (content, date_marker, apply_all = false) => ({
+        createAnnotation: (content, date_marker, scope = 'dashboard_item') => ({
             content,
             date_marker,
             created_at: moment(),
-            apply_all,
+            scope,
         }),
-        createAnnotationNow: (content, date_marker, apply_all = false) => ({
+        createAnnotationNow: (content, date_marker, scope = 'dashboard_item') => ({
             content,
             date_marker,
             created_at: moment(),
-            apply_all,
+            scope,
         }),
         deleteAnnotation: (id) => ({ id }),
         clearAnnotationsToCreate: true,
@@ -38,7 +37,7 @@ export const annotationsLogic = kea({
                     ...(before ? { before } : {}),
                     ...(after ? { after } : {}),
                     ...(props.pageKey ? { dashboardItemId: props.pageKey } : {}),
-                    apply_all: false,
+                    scope: 'dashboard_item',
                     deleted: false,
                 }
                 const response = await api.get('api/annotation/?' + toParams(params))
@@ -48,9 +47,9 @@ export const annotationsLogic = kea({
     }),
     reducers: () => ({
         annotations: {
-            createAnnotationNow: (state, { content, date_marker, created_at, apply_all }) => [
+            createAnnotationNow: (state, { content, date_marker, created_at, scope }) => [
                 ...state,
-                { id: getNextKey(state), content, date_marker, created_at, created_by: 'local', apply_all },
+                { id: getNextKey(state), content, date_marker, created_at, created_by: 'local', scope },
             ],
             deleteAnnotation: (state, { id }) => {
                 if (id >= 0) {
@@ -63,7 +62,7 @@ export const annotationsLogic = kea({
         annotationsToCreate: [
             [],
             {
-                createAnnotation: (state, { content, date_marker, created_at, apply_all }) => [
+                createAnnotation: (state, { content, date_marker, created_at, scope }) => [
                     ...state,
                     {
                         id: getNextKey(state),
@@ -71,7 +70,7 @@ export const annotationsLogic = kea({
                         date_marker,
                         created_at,
                         created_by: 'local',
-                        apply_all,
+                        scope,
                     },
                 ],
                 clearAnnotationsToCreate: () => [],
@@ -114,22 +113,18 @@ export const annotationsLogic = kea({
         ],
         groupedAnnotations: [
             () => [selectors.annotationsList, selectors.diffType],
-            (annotationsList, diffType) => {
-                const groupedResults = _.groupBy(annotationsList, (annote) =>
-                    moment(annote['date_marker']).startOf(diffType)
-                )
-                return groupedResults
-            },
+            (annotationsList, diffType) =>
+                groupBy(annotationsList, (annotation) => moment(annotation['date_marker']).startOf(diffType)),
         ],
     }),
     listeners: ({ actions, props }) => ({
-        createAnnotationNow: async ({ content, date_marker, created_at, apply_all }) => {
+        createAnnotationNow: async ({ content, date_marker, created_at, scope }) => {
             await api.create('api/annotation', {
                 content,
                 date_marker: moment(date_marker),
                 created_at,
                 dashboard_item: props.pageKey,
-                apply_all,
+                scope,
             })
             actions.loadAnnotations({})
         },

@@ -5,8 +5,6 @@ import { actionsLogic } from '~/toolbar/actions/actionsLogic'
 import { elementToActionStep, actionStepToAntdForm, stepToDatabaseFormat } from '~/toolbar/utils'
 import { toolbarLogic } from '~/toolbar/toolbarLogic'
 import { toast } from 'react-toastify'
-import { toolbarTabLogic } from '~/toolbar/toolbarTabLogic'
-import { dockLogic } from '~/toolbar/dockLogic'
 import { toolbarButtonLogic } from '~/toolbar/button/toolbarButtonLogic'
 import { actionsTabLogicType } from 'types/toolbar/actions/actionsTabLogicType'
 import { ActionType, ToolbarTab } from '~/types'
@@ -20,9 +18,11 @@ function newAction(element: HTMLElement | null): Partial<ActionType> {
     }
 }
 
-export const actionsTabLogic = kea<actionsTabLogicType<ActionType, ActionForm, FormInstance, AntdFieldData>>({
+export const actionsTabLogic = kea<
+    actionsTabLogicType<ActionType, ActionForm, FormInstance, AntdFieldData, ToolbarTab>
+>({
     actions: {
-        setForm: (form: FormInstance) => ({ form }),
+        setForm: (form: FormInstance<ActionForm>) => ({ form }),
         selectAction: (id: number | null) => ({ id: id || null }),
         newAction: (element?: HTMLElement) => ({ element: element || null }),
         inspectForElementWithIndex: (index: number | null) => ({ index }),
@@ -127,21 +127,15 @@ export const actionsTabLogic = kea<actionsTabLogicType<ActionType, ActionForm, F
     listeners: ({ actions, values }) => ({
         selectAction: ({ id }) => {
             if (id) {
-                const { mode } = dockLogic.values
-                if (mode === '') {
-                    dockLogic.actions.setMode('button')
+                if (!toolbarLogic.values.buttonVisible) {
+                    toolbarLogic.actions.showButton()
                 }
-                if (mode === '' || mode === 'button') {
-                    if (!values.buttonActionsVisible) {
-                        actions.showButtonActions()
-                    }
-                    if (!toolbarButtonLogic.values.actionsInfoVisible) {
-                        toolbarButtonLogic.actions.showActionsInfo()
-                    }
-                } else if (mode === 'dock') {
-                    if (toolbarTabLogic.values.tab !== 'actions') {
-                        toolbarTabLogic.actions.setTab('actions')
-                    }
+
+                if (!values.buttonActionsVisible) {
+                    actions.showButtonActions()
+                }
+                if (!toolbarButtonLogic.values.actionsInfoVisible) {
+                    toolbarButtonLogic.actions.showActionsInfo()
                 }
             }
         },
@@ -246,21 +240,5 @@ export const actionsTabLogic = kea<actionsTabLogicType<ActionType, ActionForm, F
                 actions.setShowActionsTooltip(false)
             }
         },
-        // not sure why { tab: ToolbarTab } needs to be manually added...
-        [toolbarTabLogic.actionTypes.setTab]: ({ tab }: { tab: ToolbarTab }) => {
-            if (tab === 'actions') {
-                actionsLogic.actions.getActions()
-            }
-        },
     }),
-
-    events: {
-        afterMount: () => {
-            const { mode } = dockLogic.values
-            const { tab } = toolbarTabLogic.values
-            if (tab === 'actions' && mode === 'dock') {
-                actionsLogic.actions.getActions()
-            }
-        },
-    },
 })

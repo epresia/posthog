@@ -2,21 +2,21 @@ import 'react-toastify/dist/ReactToastify.css'
 import 'react-datepicker/dist/react-datepicker.css'
 import { hot } from 'react-hot-loader/root'
 
-import React, { useState, useEffect, lazy, Suspense } from 'react'
-import { useValues } from 'kea'
-import { Layout, Spin } from 'antd'
+import React, { useState, useEffect } from 'react'
+import { useActions, useValues } from 'kea'
+import { Layout } from 'antd'
 import { ToastContainer, Slide } from 'react-toastify'
 
 import { Sidebar } from '~/layout/Sidebar'
 import { TopContent } from '~/layout/TopContent'
 import { SendEventsOverlay } from '~/layout/SendEventsOverlay'
-const OnboardingWizard = lazy(() => import('~/scenes/onboarding/onboardingWizard'))
-import BillingToolbar from 'lib/components/BillingToolbar'
+import { BillingToolbar } from 'lib/components/BillingToolbar'
 
 import { userLogic } from 'scenes/userLogic'
-import { sceneLogic } from 'scenes/sceneLogic'
+import { sceneLogic, unauthenticatedRoutes } from 'scenes/sceneLogic'
 import { SceneLoading } from 'lib/utils'
 import { router } from 'kea-router'
+import { CommandPalette } from 'lib/components/CommandPalette'
 
 const darkerScenes = {
     dashboard: true,
@@ -26,71 +26,69 @@ const darkerScenes = {
     paths: true,
 }
 
-const urlBackgroundMap = {
-    '/dashboard': 'https://posthog.s3.eu-west-2.amazonaws.com/graphs.png',
-    '/dashboard/1': 'https://posthog.s3.eu-west-2.amazonaws.com/graphs.png',
-    '/events': 'https://posthog.s3.eu-west-2.amazonaws.com/preview-actions.png',
-    '/sessions': 'https://posthog.s3.eu-west-2.amazonaws.com/preview-actions.png',
-    '/actions': 'https://posthog.s3.eu-west-2.amazonaws.com/preview-actions.png',
-    '/actions/live': 'https://posthog.s3.eu-west-2.amazonaws.com/preview-actions.png',
-    '/insights': 'https://posthog.s3.eu-west-2.amazonaws.com/preview-action-trends.png',
-    '/funnel': 'https://posthog.s3.eu-west-2.amazonaws.com/funnel.png',
-    '/paths': 'https://posthog.s3.eu-west-2.amazonaws.com/paths.png',
-}
-
 function App() {
     const { user } = useValues(userLogic)
     const { scene, params, loadedScenes } = useValues(sceneLogic)
     const { location } = useValues(router)
+    const { replace } = useActions(router)
     const [sidebarCollapsed, setSidebarCollapsed] = useState(typeof window !== 'undefined' && window.innerWidth <= 991)
 
-    const [image, setImage] = useState(null)
     const Scene = loadedScenes[scene]?.component || (() => <SceneLoading />)
 
     useEffect(() => {
-        setImage(urlBackgroundMap[location.pathname])
-    }, [location.pathname])
+        // If user is already logged in, redirect away from unauthenticated routes like signup
+        if (user && unauthenticatedRoutes.includes(scene)) {
+            replace('/')
+            return
+        }
+
+        // redirect to ingestion if not completed
+        if (user && !user.team.completed_snippet_onboarding && !location.pathname.startsWith('/ingestion')) {
+            replace('/ingestion')
+            return
+        }
+    }, [scene, user])
 
     if (!user) {
-        return null
+        return (
+            unauthenticatedRoutes.includes(scene) && (
+                <>
+                    <Scene {...params} />{' '}
+                    <ToastContainer autoClose={8000} transition={Slide} position="bottom-center" />
+                </>
+            )
+        )
     }
 
-    if (!user.team.completed_snippet_onboarding) {
+    if (scene === 'ingestion' || !scene) {
         return (
             <>
-                <Suspense fallback={<Spin></Spin>}>
-                    <OnboardingWizard user={user}></OnboardingWizard>
-                </Suspense>
+                <Scene user={user} {...params} />
                 <ToastContainer autoClose={8000} transition={Slide} position="bottom-center" />
             </>
         )
     }
 
     return (
-        <Layout className="bg-white">
-            <Sidebar user={user} sidebarCollapsed={sidebarCollapsed} setSidebarCollapsed={setSidebarCollapsed} />
-            <Layout
-                className={`${darkerScenes[scene] ? 'bg-dashboard' : 'bg-white'}${
-                    !sidebarCollapsed ? ' with-open-sidebar' : ''
-                }`}
-                style={{ minHeight: '100vh' }}
-            >
-                <div className="content py-3 layout-top-content">
+        <>
+            <Layout className="bg-white">
+                <Sidebar user={user} sidebarCollapsed={sidebarCollapsed} setSidebarCollapsed={setSidebarCollapsed} />
+                <Layout
+                    className={`${darkerScenes[scene] ? 'bg-dashboard' : 'bg-white'}${
+                        !sidebarCollapsed ? ' with-open-sidebar' : ''
+                    }`}
+                    style={{ minHeight: '100vh' }}
+                >
                     <TopContent user={user} />
-                </div>
-                <Layout.Content className="pl-5 pr-5 pt-3" data-attr="layout-content">
-                    {user.billing?.should_setup_billing && (
-                        <BillingToolbar billingUrl={user.billing.subscription_url} />
-                    )}
-                    {!user.has_events && image ? (
-                        <SendEventsOverlay image={image} user={user} />
-                    ) : (
-                        <Scene user={user} {...params} />
-                    )}
-                    <ToastContainer autoClose={8000} transition={Slide} position="bottom-center" />
-                </Layout.Content>
+                    <Layout.Content className="pl-5 pr-5 pt-3" data-attr="layout-content">
+                        <BillingToolbar />
+                        {!user.has_events ? <SendEventsOverlay /> : <Scene user={user} {...params} />}
+                        <ToastContainer autoClose={8000} transition={Slide} position="bottom-center" />
+                    </Layout.Content>
+                </Layout>
             </Layout>
-        </Layout>
+            <CommandPalette />
+        </>
     )
 }
 

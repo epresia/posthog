@@ -5,7 +5,6 @@ import { TeamInvitationModal } from 'lib/components/TeamInvitation'
 import { Menu, Layout, Modal } from 'antd'
 import {
     UserOutlined,
-    FunnelPlotOutlined,
     SettingOutlined,
     RiseOutlined,
     PlusOutlined,
@@ -15,11 +14,13 @@ import {
     ContainerOutlined,
     LineChartOutlined,
     FundOutlined,
-    ExperimentOutlined,
+    FlagOutlined,
     ClockCircleOutlined,
     MessageOutlined,
     TeamOutlined,
     LockOutlined,
+    WalletOutlined,
+    DatabaseOutlined,
 } from '@ant-design/icons'
 import { useActions, useValues } from 'kea'
 import { Link } from 'lib/components/Link'
@@ -30,6 +31,7 @@ import { HogIcon } from 'lib/icons/HogIcon'
 import { useEscapeKey } from 'lib/hooks/useEscapeKey'
 import { ToolbarModal } from '~/layout/ToolbarModal/ToolbarModal'
 import whiteLogo from './../../public/posthog-logo-white.svg'
+import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 
 const itemStyle = { display: 'flex', alignItems: 'center' }
 
@@ -47,8 +49,6 @@ function Logo() {
 // to show the right page in the sidebar
 const sceneOverride = {
     action: 'actions',
-    funnel: 'funnels',
-    editFunnel: 'funnels',
     person: 'people',
     dashboard: 'dashboards',
     featureFlags: 'experiments',
@@ -62,7 +62,9 @@ const submenuOverride = {
     cohorts: 'people',
     setup: 'settings',
     annotations: 'settings',
+    billing: 'settings',
     licenses: 'settings',
+    systemStatus: 'settings',
 }
 
 export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
@@ -77,9 +79,11 @@ export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
     const { location } = useValues(router)
     const { push } = useActions(router)
     const { dashboards, pinnedDashboards } = useValues(dashboardsModel)
+    const { featureFlags } = useValues(featureFlagLogic)
 
     useEscapeKey(collapseSidebar, [sidebarCollapsed])
 
+    const toolbarEnabled = user.toolbar_mode !== 'disabled'
     let activeScene = sceneOverride[loadingScene || scene] || loadingScene || scene
     const openSubmenu = submenuOverride[activeScene] || activeScene
 
@@ -116,17 +120,19 @@ export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
                 >
                     <Logo />
 
-                    <Menu.Item
-                        key="toolbar"
-                        style={{ ...itemStyle, background: 'hsl(210, 10%, 11%)', fontWeight: 'bold' }}
-                        onClick={() => setToolbarModalOpen(true)}
-                        data-attr="menu-item-toolbar"
-                    >
-                        <div className="sidebar-toolbar-imitation">
-                            <HogIcon />
-                        </div>
-                        <span className="sidebar-label">Launch Toolbar!</span>
-                    </Menu.Item>
+                    {toolbarEnabled ? (
+                        <Menu.Item
+                            key="toolbar"
+                            style={{ ...itemStyle, background: 'hsl(210, 10%, 11%)', fontWeight: 'bold' }}
+                            onClick={() => setToolbarModalOpen(true)}
+                            data-attr="menu-item-toolbar"
+                        >
+                            <div className="sidebar-toolbar-imitation">
+                                <HogIcon />
+                            </div>
+                            <span className="sidebar-label">Launch Toolbar!</span>
+                        </Menu.Item>
+                    ) : null}
 
                     {pinnedDashboards.map((dashboard, index) => (
                         <Menu.Item
@@ -136,7 +142,7 @@ export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
                             title=""
                         >
                             <LineChartOutlined />
-                            <span className="sidebar-label">{dashboard.name}</span>
+                            <span className="sidebar-label">{dashboard.name ?? 'Untitled'}</span>
                             <Link to={`/dashboard/${dashboard.id}`} onClick={collapseSidebar} />
                         </Menu.Item>
                     ))}
@@ -160,17 +166,21 @@ export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
                         title={
                             <span style={itemStyle} data-attr="menu-item-events">
                                 <ContainerOutlined />
-                                <span className="sidebar-label">{'Events'}</span>
+                                <span className="sidebar-label">
+                                    {!featureFlags['actions-ux-201012'] ? 'Events' : 'Events & Actions'}
+                                </span>
                             </span>
                         }
                         onTitleClick={() => {
                             collapseSidebar()
-                            location.pathname !== '/events' && push('/events')
+                            location.pathname !== '/events' && push('/actions')
                         }}
                     >
                         <Menu.Item key="events" style={itemStyle} data-attr="menu-item-all-events">
                             <ContainerOutlined />
-                            <span className="sidebar-label">{'All Events'}</span>
+                            <span className="sidebar-label">
+                                {!featureFlags['actions-ux-201012'] ? 'All Events' : 'Raw Events'}
+                            </span>
                             <Link to={'/events'} onClick={collapseSidebar} />
                         </Menu.Item>
                         <Menu.Item key="actions" style={itemStyle} data-attr="menu-item-actions">
@@ -178,11 +188,13 @@ export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
                             <span className="sidebar-label">{'Actions'}</span>
                             <Link to={'/actions'} onClick={collapseSidebar} />
                         </Menu.Item>
-                        <Menu.Item key="liveActions" style={itemStyle} data-attr="menu-item-live-actions">
-                            <SyncOutlined />
-                            <span className="sidebar-label">{'Live Actions'}</span>
-                            <Link to={'/actions/live'} onClick={collapseSidebar} />
-                        </Menu.Item>
+                        {!featureFlags['actions-ux-201012'] && (
+                            <Menu.Item key="liveActions" style={itemStyle} data-attr="menu-item-live-actions">
+                                <SyncOutlined />
+                                <span className="sidebar-label">{'Live Actions'}</span>
+                                <Link to={'/actions/live'} onClick={collapseSidebar} />
+                            </Menu.Item>
+                        )}
                         <Menu.Item key="sessions" style={itemStyle} data-attr="menu-item-sessions">
                             <ClockCircleOutlined />
                             <span className="sidebar-label">{'Sessions'}</span>
@@ -214,15 +226,9 @@ export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
                             <Link to={'/people/cohorts'} onClick={collapseSidebar} />
                         </Menu.Item>
                     </Menu.SubMenu>
-
-                    <Menu.Item key="funnels" style={itemStyle} data-attr="menu-item-funnels">
-                        <FunnelPlotOutlined />
-                        <span className="sidebar-label">{'Funnels'}</span>
-                        <Link to={'/funnel'} onClick={collapseSidebar} />
-                    </Menu.Item>
                     <Menu.Item key="experiments" style={itemStyle} data-attr="menu-item-feature-f">
-                        <ExperimentOutlined />
-                        <span className="sidebar-label">{'Experiments'}</span>
+                        <FlagOutlined />
+                        <span className="sidebar-label">{'Feature Flags'}</span>
                         <Link to={'/experiments/feature_flags'} onClick={collapseSidebar} />
                     </Menu.Item>
 
@@ -249,6 +255,23 @@ export function Sidebar({ user, sidebarCollapsed, setSidebarCollapsed }) {
                             <span className="sidebar-label">{'Annotations'}</span>
                             <Link to={'/annotations'} onClick={collapseSidebar} />
                         </Menu.Item>
+
+                        {featureFlags['billing-management-page'] && (
+                            <Menu.Item key="billing" style={itemStyle} data-attr="menu-item-billing">
+                                <WalletOutlined />
+                                <span className="sidebar-label">Billing</span>
+                                <Link to="/billing" onClick={collapseSidebar} />
+                            </Menu.Item>
+                        )}
+
+                        {(!user.is_multi_tenancy || (user.is_multi_tenancy && user.is_staff)) && (
+                            <Menu.Item key="systemStatus" style={itemStyle} data-attr="menu-item-system-status">
+                                <DatabaseOutlined />
+                                <span className="sidebar-label">System Status</span>
+                                <Link to={'/system_status'} onClick={collapseSidebar} />
+                            </Menu.Item>
+                        )}
+
                         {!user.is_multi_tenancy && user.ee_available && (
                             <Menu.Item key="licenses" style={itemStyle} data-attr="menu-item-licenses">
                                 <LockOutlined />
