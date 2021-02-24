@@ -7,15 +7,23 @@ import {
     CommandResultTemplate,
     CommandFlow,
     RegExpCommandPairs,
+    CommandResultDisplayable,
 } from 'lib/components/CommandPalette/commandPaletteLogic'
 import { funnelLogic } from 'scenes/funnels/funnelLogic'
-import { commandPaletteLogicType } from 'types/lib/components/CommandPalette/commandPaletteLogicType'
+import { commandPaletteLogicType } from './commandPaletteLogicType'
 import { FunnelPlotOutlined } from '@ant-design/icons'
 
 const FUNNEL_COMMAND_SCOPE = 'funnels'
 
 export const funnelCommandLogic = kea<
-    commandPaletteLogicType<Command, CommandRegistrations, CommandResult, CommandFlow, RegExpCommandPairs>
+    commandPaletteLogicType<
+        Command,
+        CommandRegistrations,
+        CommandResult,
+        CommandFlow,
+        RegExpCommandPairs,
+        CommandResultDisplayable
+    >
 >({
     connect: [commandPaletteLogic],
     events: () => ({

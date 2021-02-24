@@ -1,39 +1,36 @@
 import React from 'react'
-import { eventWithTime } from 'rrweb/typings/types'
-import { SessionType } from '~/types'
 import { PlayCircleOutlined } from '@ant-design/icons'
-import { Modal } from 'antd'
-import { green } from '@ant-design/colors'
-import SessionsPlayer from './SessionsPlayer'
+import { SessionType } from '~/types'
+import { fromParams, toParams } from 'lib/utils'
+import { Link } from 'lib/components/Link'
+import './Sessions.scss'
 
 interface SessionsPlayerButtonProps {
     session: SessionType
 }
 
-export default function SessionsPlayerButton({ session }: SessionsPlayerButtonProps): JSX.Element | null {
-    function showSessionPlayer(events: eventWithTime[]): void {
-        Modal.info({
-            centered: true,
-            content: <SessionsPlayer events={events}></SessionsPlayer>,
-            icon: null,
-            okType: 'primary',
-            okText: 'Done',
-            width: 1000,
-        })
+export const sessionPlayerUrl = (sessionRecordingId: string): string => {
+    return `${location.pathname}?${toParams({ ...fromParams(), sessionRecordingId })}`
+}
+
+export function SessionsPlayerButton({ session }: SessionsPlayerButtonProps): JSX.Element | null {
+    if (!session.session_recordings) {
+        return null
     }
 
-    const snapshotEventsData: eventWithTime[] = session.events
-        .filter((event) => event.event === '$snapshot')
-        .map((event) => event.properties?.$snapshot_data)
-    if (snapshotEventsData.length < 2) return null
-
     return (
-        <PlayCircleOutlined
-            style={{ color: green.primary }}
-            onClick={(event: React.MouseEvent) => {
-                event.stopPropagation()
-                showSessionPlayer(snapshotEventsData)
-            }}
-        ></PlayCircleOutlined>
+        <>
+            {session.session_recordings.map(({ id, viewed }) => (
+                <Link
+                    to={sessionPlayerUrl(id)}
+                    className={`sessions-player-button ${viewed ? 'viewed' : ''}`}
+                    key={id}
+                    onClick={(event) => event.stopPropagation()}
+                    data-attr="sessions-player-button"
+                >
+                    <PlayCircleOutlined />
+                </Link>
+            ))}
+        </>
     )
 }

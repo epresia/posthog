@@ -9,16 +9,16 @@ from ee.clickhouse.sql.events import GET_EVENTS_WITH_PROPERTIES
 from ee.clickhouse.util import ClickhouseTestMixin
 from posthog.models.cohort import Cohort
 from posthog.models.event import Event
-from posthog.models.filter import Filter
+from posthog.models.filters import Filter
+from posthog.models.filters.test.test_filter import property_to_Q_test_factory
 from posthog.models.person import Person
 from posthog.models.team import Team
-from posthog.test.test_filter_model import property_to_Q_test_factory
 
 
 def _filter_events(
     filter: Filter, team: Team, person_query: Optional[bool] = False, order_by: Optional[str] = None,
 ):
-    prop_filters, prop_filter_params = parse_prop_clauses("uuid", filter.properties, team)
+    prop_filters, prop_filter_params = parse_prop_clauses(filter.properties, team.pk)
     params = {"team_id": team.pk, **prop_filter_params}
 
     if order_by == "id":
@@ -46,7 +46,7 @@ def _create_event(**kwargs):
     return Event(id=str(uuid))
 
 
-class TestClickhouseFiltering(
+class TestFiltering(
     ClickhouseTestMixin, property_to_Q_test_factory(_filter_events, _create_event, _create_person),  # type: ignore
 ):
     def test_person_cohort_properties(self):
@@ -69,7 +69,7 @@ class TestClickhouseFiltering(
 
         filter = Filter(data={"properties": [{"key": "id", "value": cohort1.pk, "type": "cohort"}],})
 
-        prop_clause, prop_clause_params = parse_prop_clauses("uuid", filter.properties, self.team)
+        prop_clause, prop_clause_params = parse_prop_clauses(filter.properties, self.team.pk)
         query = """
         SELECT * FROM person_distinct_id WHERE team_id = %(team_id)s {prop_clause}
         """.format(
@@ -81,7 +81,7 @@ class TestClickhouseFiltering(
 
         # test cohort2 with negation
         filter = Filter(data={"properties": [{"key": "id", "value": cohort2.pk, "type": "cohort"}],})
-        prop_clause, prop_clause_params = parse_prop_clauses("uuid", filter.properties, self.team)
+        prop_clause, prop_clause_params = parse_prop_clauses(filter.properties, self.team.pk)
         query = """
         SELECT * FROM person_distinct_id WHERE team_id = %(team_id)s {prop_clause}
         """.format(

@@ -6,20 +6,16 @@ from rest_framework.response import Response
 from ee.clickhouse.client import sync_execute
 from ee.clickhouse.queries.clickhouse_paths import ClickhousePaths
 from ee.clickhouse.sql.events import ELEMENT_TAG_COUNT
-from ee.clickhouse.util import CH_PATH_ENDPOINT, endpoint_enabled
 from posthog.api.paths import PathsViewSet
 from posthog.models import Event, Filter
+from posthog.models.filters.path_filter import PathFilter
 
 
 class ClickhousePathsViewSet(PathsViewSet):
     @action(methods=["GET"], detail=False)
-    def elements(self, request: request.Request):
+    def elements(self, request: request.Request, **kwargs):
 
-        if not endpoint_enabled(CH_PATH_ENDPOINT, request.user.distinct_id):
-            result = super().get_elements(request)
-            return Response(result)
-
-        team = request.user.team_set.get()
+        team = self.team
         response = sync_execute(ELEMENT_TAG_COUNT, {"team_id": team.pk, "limit": 20})
 
         resp = []
@@ -30,13 +26,9 @@ class ClickhousePathsViewSet(PathsViewSet):
 
     # FIXME: Timestamp is timezone aware timestamp, date range uses naive date.
     # To avoid unexpected results should convert date range to timestamps with timezone.
-    def list(self, request):
+    def list(self, request, **kwargs):
 
-        if not endpoint_enabled(CH_PATH_ENDPOINT, request.user.distinct_id):
-            result = super().get_list(request)
-            return Response(result)
-
-        team = request.user.team_set.get()
-        filter = Filter(request=request)
+        team = self.team
+        filter = PathFilter(request=request)
         resp = ClickhousePaths().run(filter=filter, team=team)
         return Response(resp)

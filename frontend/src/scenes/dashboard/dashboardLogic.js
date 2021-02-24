@@ -6,21 +6,22 @@ import { router } from 'kea-router'
 import { toast } from 'react-toastify'
 import { Link } from 'lib/components/Link'
 import React from 'react'
-import { isAndroidOrIOS, clearDOMTextSelection } from 'lib/utils'
+import { isAndroidOrIOS, clearDOMTextSelection, toParams } from 'lib/utils'
+import { dashboardItemsModel } from '~/models/dashboardItemsModel'
+import { PATHS_VIZ, ACTIONS_LINE_GRAPH_LINEAR } from 'lib/constants'
+import { ViewType } from 'scenes/insights/insightLogic'
+import { eventUsageLogic } from 'lib/utils/eventUsageLogic'
+import { dateFilterLogic } from 'lib/components/DateFilter/dateFilterLogic'
 
 export const dashboardLogic = kea({
-    connect: [dashboardsModel],
+    connect: [dashboardsModel, dashboardItemsModel, eventUsageLogic, dateFilterLogic],
 
     key: (props) => props.id,
 
     actions: () => ({
         addNewDashboard: true,
         renameDashboard: true,
-        renameDashboardItem: (id) => ({ id }),
-        renameDashboardItemSuccess: (item) => ({ item }),
         setIsSharedDashboard: (id, isShared) => ({ id, isShared }),
-        duplicateDashboardItem: (id, dashboardId, move = false) => ({ id, dashboardId, move }),
-        duplicateDashboardItemSuccess: (item) => ({ item }),
         updateLayouts: (layouts) => ({ layouts }),
         updateContainerWidth: (containerWidth, columns) => ({ containerWidth, columns }),
         saveLayouts: true,
@@ -29,17 +30,21 @@ export const dashboardLogic = kea({
         enableWobblyDragging: true,
         disableDragging: true,
         refreshDashboardItem: (id) => ({ id }),
+        refreshAllDashboardItems: true,
+        updateAndRefreshDashboard: true,
     }),
 
     loaders: ({ props }) => ({
         allItems: [
-            [],
+            {},
             {
                 loadDashboardItems: async () => {
                     try {
                         const dashboard = await api.get(
-                            `api/dashboard/${props.id}${props.shareToken ? '/?share_token=' + props.shareToken : ''}`
+                            `api/dashboard/${props.id}/?${toParams({ share_token: props.shareToken })}`
                         )
+                        dateFilterLogic.actions.setDates(dashboard.filters.date_from, dashboard.filters.date_to)
+                        eventUsageLogic.actions.reportDashboardViewed(dashboard, !!props.shareToken)
                         return dashboard
                     } catch (error) {
                         if (error.status === 404) {
@@ -49,13 +54,18 @@ export const dashboardLogic = kea({
                         throw error
                     }
                 },
+                updateDashboard: async (filters) => {
+                    return await api.update(
+                        `api/dashboard/${props.id}/?${toParams({ share_token: props.shareToken })}`,
+                        { filters }
+                    )
+                },
             },
         ],
     }),
-
     reducers: ({ props }) => ({
         allItems: {
-            renameDashboardItemSuccess: (state, { item }) => {
+            [dashboardItemsModel.actions.renameDashboardItemSuccess]: (state, { item }) => {
                 return { ...state, items: state.items.map((i) => (i.id === item.id ? item : i)) }
             },
             updateLayouts: (state, { layouts }) => {
@@ -81,7 +91,7 @@ export const dashboardLogic = kea({
             updateItemColor: (state, { id, color }) => {
                 return { ...state, items: state.items.map((i) => (i.id === id ? { ...i, color } : i)) }
             },
-            duplicateDashboardItemSuccess: (state, { item }) => {
+            [dashboardItemsModel.actions.duplicateDashboardItemSuccess]: (state, { item }) => {
                 return { ...state, items: item.dashboard === parseInt(props.id) ? [...state.items, item] : state.items }
             },
         },
@@ -106,7 +116,6 @@ export const dashboardLogic = kea({
             },
         ],
     }),
-
     selectors: ({ props, selectors }) => ({
         items: [() => [selectors.allItems], (allItems) => allItems?.items?.filter((i) => !i.deleted)],
         itemsLoading: [() => [selectors.allItemsLoading], (allItemsLoading) => allItemsLoading],
@@ -134,15 +143,20 @@ export const dashboardLogic = kea({
                     const layouts = items
                         .filter((i) => !i.deleted)
                         .map((item) => {
+                            const isRetention =
+                                item.filters.insight === ViewType.RETENTION &&
+                                item.filters.display === ACTIONS_LINE_GRAPH_LINEAR
+                            const defaultWidth = isRetention || item.filters.display === PATHS_VIZ ? 8 : 6
+                            const defaultHeight = isRetention ? 8 : item.filters.display === PATHS_VIZ ? 12.5 : 5
                             const layout = item.layouts && item.layouts[col]
                             const { x, y, w, h } = layout || {}
-                            const width = Math.min(w || 6, cols[col])
+                            const width = Math.min(w || defaultWidth, cols[col])
                             return {
                                 i: `${item.id}`,
                                 x: Number.isInteger(x) && x + width - 1 < cols[col] ? x : 0,
                                 y: Number.isInteger(y) ? y : Infinity,
                                 w: width,
-                                h: h || 5,
+                                h: h || defaultHeight,
                             }
                         })
 
@@ -212,7 +226,6 @@ export const dashboardLogic = kea({
             },
         ],
     }),
-
     events: ({ actions, cache }) => ({
         afterMount: [actions.loadDashboardItems],
         beforeUnmount: () => {
@@ -252,19 +265,6 @@ export const dashboardLogic = kea({
             })
         },
 
-        renameDashboardItem: async ({ id }) => {
-            prompt({ key: `rename-dashboard-item-${id}` }).actions.prompt({
-                title: 'Rename panel',
-                placeholder: 'Please enter the new name',
-                value: values.items.find((item) => item.id === id)?.name,
-                error: 'You must enter name',
-                success: async (name) => {
-                    const item = await api.update(`api/dashboard_item/${id}`, { name })
-                    actions.renameDashboardItemSuccess(item)
-                },
-            })
-        },
-
         updateLayouts: () => {
             actions.saveLayouts()
         },
@@ -284,67 +284,7 @@ export const dashboardLogic = kea({
         },
 
         updateItemColor: ({ id, color }) => {
-            api.update(`api/dashboard_item/${id}`, { color })
-        },
-
-        duplicateDashboardItem: async ({ id, dashboardId, move }) => {
-            const item = values.items.find((item) => item.id === id)
-            if (!item) {
-                return
-            }
-
-            const layouts = {}
-            Object.entries(item.layouts || {}).forEach(([size, { w, h }]) => {
-                layouts[size] = { w, h }
-            })
-
-            const { id: _discard, ...rest } = item // eslint-disable-line
-            const newItem = dashboardId ? { ...rest, dashboard: dashboardId, layouts } : { ...rest, layouts }
-            const addedItem = await api.create('api/dashboard_item', newItem)
-
-            const dashboard = dashboardId ? dashboardsModel.values.rawDashboards[dashboardId] : null
-
-            if (move) {
-                const deletedItem = await api.update(`api/dashboard_item/${item.id}`, { deleted: true })
-                dashboardsModel.actions.updateDashboardItem(deletedItem)
-
-                const toastId = toast(
-                    <div data-attr="success-toast">
-                        Panel moved to{' '}
-                        <Link to={`/dashboard/${dashboard.id}`} onClick={() => toast.dismiss(toastId)}>
-                            {dashboard.name || 'Untitled'}
-                        </Link>
-                        .&nbsp;
-                        <Link
-                            onClick={async () => {
-                                toast.dismiss(toastId)
-                                const [restoredItem, deletedItem] = await Promise.all([
-                                    api.update(`api/dashboard_item/${item.id}`, { deleted: false }),
-                                    api.update(`api/dashboard_item/${addedItem.id}`, { deleted: true }),
-                                ])
-                                toast(<div>Panel move reverted!</div>)
-                                dashboardsModel.actions.updateDashboardItem(restoredItem)
-                                dashboardsModel.actions.updateDashboardItem(deletedItem)
-                            }}
-                        >
-                            Undo
-                        </Link>
-                    </div>
-                )
-            } else if (!move && dashboardId) {
-                // copy
-                const toastId = toast(
-                    <div data-attr="success-toast">
-                        Panel copied to{' '}
-                        <Link to={`/dashboard/${dashboard.id}`} onClick={() => toast.dismiss(toastId)}>
-                            {dashboard.name || 'Untitled'}
-                        </Link>
-                    </div>
-                )
-            } else {
-                actions.duplicateDashboardItemSuccess(addedItem)
-                toast(<div data-attr="success-toast">Panel duplicated!</div>)
-            }
+            api.update(`api/insight/${id}`, { color })
         },
 
         enableWobblyDragging: () => {
@@ -381,12 +321,26 @@ export const dashboardLogic = kea({
                 cache.draggingToastId = null
             }
         },
-        refreshDashboardItem: async ({ id }) => {
-            const dashboardItem = await api.get(`api/dashboard_item/${id}`)
+        refreshDashboardItem: async ({ id }, breakpoint) => {
+            const dashboardItem = await api.get(`api/insight/${id}`)
+            await breakpoint()
             dashboardsModel.actions.updateDashboardItem(dashboardItem)
             if (dashboardItem.refreshing) {
                 setTimeout(() => actions.refreshDashboardItem(id), 1000)
             }
+        },
+        refreshAllDashboardItems: async (_, breakpoint) => {
+            await breakpoint(200)
+            dashboardItemsModel.actions.refreshAllDashboardItems({})
+        },
+        updateAndRefreshDashboard: async (_, breakpoint) => {
+            await breakpoint(200)
+            const filters = {
+                date_from: dateFilterLogic.values.dates.dateFrom,
+                date_to: dateFilterLogic.values.dates.dateTo,
+            }
+            actions.updateDashboard(filters)
+            dashboardItemsModel.actions.refreshAllDashboardItems(filters)
         },
     }),
 })

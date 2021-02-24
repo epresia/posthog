@@ -1,10 +1,456 @@
 # Changelog
 
-### 1.15.0 - Thursday 15 October
+### 1.21.0 - Wednesday 17 February 2021
+
+
+- [New Navigation For All](https://github.com/PostHog/posthog/pull/3167)
+
+![New Nav](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/new-navigation.png)
+
+While this might not be news to all of you, we have now released our new navigation to everyone.
+
+We had this behind a feature flag, but now all our users have access to our fresh spaceship-like navigation. What do you think? 🚀
+
+
+- [Refreshing Insights](https://github.com/PostHog/posthog/pull/3144)
+
+![Refreshing Insights](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/refreshing-insights.png)
+
+To provide a smooth user experience, we cache query results so that you don't have to wait for a query to run every time you go back to a chart you've recently looked at.
+
+However, this might mean you're sometimes looking at slightly outdated results. As such, we now clearly indicate to you if you're looking at a cached result, how long ago this result was computed, and allow you to refresh it any time you want to see an updated result. 
+
+
+- [Session Recording Filters](https://github.com/PostHog/posthog/pull/2993)
+
+![Session filters](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/session-filters.png)
+
+Our session recording filters just got **so much more powerful**.
+
+Filter by session duration, user properties, unseen recordings, actions performed in a session, and so much more. 
+
+You can now get a lot more out of your session recording sessions by tailoring the recordings to specific areas of your product you're looking into.
+
+For a start, how about [integrating PostHog with Sentry](https://posthog.com/docs/integrations/sentry-integration) and watching all recordings with an `$exception` event in them?
+
+- [Multiple Groups in Feature Flags](https://github.com/PostHog/posthog/pull/3030)
+
+![Feature Flag Multiple Groups](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/feature-flag-groups.png)
+
+Feature flags can now be rolled out to multiple different groups that use distinct settings, unlocking a whole new world of opportunities for your A/B testing and feature rollout processes.
+
+For example, you can now determine a feature flag to be rolled out to all of the following:
+
+- 100% of users in the 'Beta Testers' cohort
+- 40% of all your users
+- All users in a specific team that requested the feature from you  
+
+You can then adjust the filters and rollout percentage for each individually, giving you an even greater degree of flexibility with how you leverage our flags in your workflows.
+
+- [A New Plugins UI with Brand New Features](https://github.com/PostHog/posthog/pull/2774)
+
+![Plugins UI](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/plugins-ui.png)
+
+A lot has happened to our plugins feature since the last release, including:
+
+* An improved UI
+* The ability to reorder plugins
+* The ability to upgrade plugins (and see exactly what changed between plugin versions)
+* Autofill on commonly used plugin configuration fields
+* A new plugin configuration field type, letting plugin builders specify pre-determined choices for the user to select from
+* A ton of performance improvements
+
+- [Taxonomy Plugin](https://posthog.com/plugins/taxonomy-standardizer)
+
+![Taxonomy Plugin](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/taxonomy-plugin.png)
+
+Standardize your event names into a single naming pattern by converting the names of your events that don't match your desired pattern into the chosen format, such as `camelCase` or `snake_case`.
+
+- [Bitbucket Release Tracker Plugin (Beta)](https://posthog.com/plugins/bitbucket-release-tracker)
+
+![Bitbucket Plugin](https://github.com/PostHog/bitbucket-release-tracker/raw/main/readme-assets/release-tracker.png)
+
+Get your Bitbucket release tags into PostHog as annotations on your graphs, so you can track the impact of releases on your metrics.
+
+### 1.20.0 - Tuesday 19 January 2021
+
+- [Plugins, Plugins, and more Plugins](/plugins)
+
+![Plugin Library Screenshot](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/plugin-library.png)
+
+A lot has been happening on our Plugins front. 
+
+Besides a whole bunch work to deliver performance improvements and mature the PostHog Plugins ecosystem, we have two major changes being introduced with this new PostHog version:
+
+**A shiny new plugin library**
+
+We have released a [plugin library](/plugins) where you can browse through all the plugins built by our core team and community, and made sure the library is populated with plugins! Thus, we now have integrations that support getting data from GitHub and GitLab, or sending data over to BigQuery and Hubspot, for example. 
+
+We're working to make plugins available on Cloud, but, in the meanwhile, if you're self-hosting, do check out our plugins and let us know what you think!
+
+**Plugins can now access persistent storage**
+
+Up until now, plugin builders would have noticed that the `cache` could have been used to store data in-memory using Redis, but we now also support `storage`, which allows plugins to store data in a persistent form, opening up a lot of new use cases for you to explore.
+
+- [Static Cohorts](https://github.com/PostHog/posthog/pull/2932)
+
+![Static Cohorts Screenshot](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/static-cohorts.png)
+
+In addition to our standard dynamic cohorts (periodically updated based on the definition), PostHog now support static cohorts - groups of users that don't update. 
+
+To create a static cohort, head over to 'People' -> 'Cohorts' and, when creating a new cohort, select 'Upload CSV'. This CSV file should have a single column with either the user's `distinct_id` or `email`. 
+
+This way, you can import data from outside sources into a PostHog cohort more easily, as well as turn your dynamic cohorts into static ones by first exporting them. You could, for example, add your Mailchimp subscribers list as a static cohort.
+
+- [Sortable Funnel Steps](https://github.com/PostHog/posthog/pull/2862)
+
+![Sortable Funnels Screenshot](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/funnel-step-reordering.png)
+
+As of this new release, when you head over to Funnels in PostHog, you will see 3 dots next to each funnel step. By dragging these 3 dots up and down you can now re-order your funnel's steps, for example if you made a mistake, or want to explore different funnel structures. 
+
+This was a feature that was consistently requested by the PostHog community, and we'd like to also shoutout [@glmaljkovich](https://github.com/glmaljkovich) for helping us build it!
+
+- [PostHog Bookmarklet](https://github.com/PostHog/posthog/pull/2774)
+
+![Bookmarklet Gif](https://posthog-static-files.s3.us-east-2.amazonaws.com/Website-Assets/Array/bookmarklet.gif)
+
+To try out the PostHog snippet without having to update anything on your codebase, you can make use of our bookmarklet, which you can find over in 'Project Settings'.
+
+This lets you capture events in your website without any code, and we've been using it actively during our demos!
+
+- [Sessions List now loads 10x faster](https://github.com/PostHog/posthog/pull/2934)
+
+Since joining us, Karl has been submitting performance improvement after performance improvement.
+
+This time, as session recordings are being used more and more by our users, it was time to speed up the loading of the sessions list, which now loads 10x faster!
+
+### 1.19.0 - Tuesday 15 December 2020
+
+- [Scheduled Plugins and Editor](https://github.com/PostHog/posthog/pull/2743)
+
+![Plugin Editor Screenshot](https://posthog.com/static/f4aae550d6d85f934877d6e2c9e787c8/8c557/plugin-editor.png)
+
+We now support scheduled plugins that run periodically on a specified time cycle (e.g. minute, hour, day), as well as have a built-in code editor for plugins right into the PostHog UI.
+
+With the ability to run tasks in specified time intervals, you can now setup plugins that, for example, keep track of external metrics and add this data to PostHog via new events. This is possible because we now [support `posthog.capture` calls inside plugins as well](https://github.com/PostHog/posthog-plugin-server/pull/67). 
+
+Some metrics you might want to keep track of are, for example, server performance, GitHub activities (e.g. stars ⭐ ), engagement with your project's social media profiles, and anything else you can think of!
+
+You can learn more about scheduled plugins on the [PR that created them](https://github.com/PostHog/posthog-plugin-server/pull/63), as well as our docs for [building your own plugin](https://posthog.com/docs/plugins/build).
+
+> **Note:** Plugins are a Beta feature currently only available on self-hosted instances. We are working to make it available on PostHog Cloud soon.
+
+- [Lifecycle Analysis](https://github.com/PostHog/posthog/pull/2460)
+
+![Lifecycle Screenshot](https://posthog.com/static/b577dd0e4d2817e816ba602e5ef94e1d/8c557/lifecycle.png)
+
+Our 'Trends' tab just got an awesome new feature: lifecycle graphs!
+
+Lifecycle analysis digs deeper into your events and shows you a breakdown of the users who performed the event into new, returning, and resurrecting users. In addition, it also shows you the churn on for the specified time period. 
+
+To use it, select 'Shown As' -> 'Lifecycle' when in the 'Trends' tab.  
+
+- [New Session Recording Compression Scheme](https://github.com/PostHog/posthog/pull/2578)
+
+![Gzip Session Recording Screenshot](https://posthog.com/static/fe91676a24a8c70a017fafe2ab68f63e/8c557/session-recording-gzip.png)
+
+See the image above? That's our event processing time before and after the new compression scheme!
+
+By using gzip-based compression, we have now significantly improved performance both on the client and server, making event processing faster, as well as decreasing the number of session recordings that are lost. Be on the lookout for more green play buttons on your 'Sessions' page now.
+
+> If you installed `posthog-js` via `npm`, you should update to version 1.8.0 to get access to this update. Snippet users have access to the latest version by default.
+
+- [New Actions UX](https://github.com/PostHog/posthog/pull/2615)
+
+![New Actions UX Screenshot](https://posthog.com/static/1f931cd359d1238e8ecba8d72a0be0c4/8c557/actions-ux.png)
+
+This might not be news to all of you, since we have been experimenting with our actions UX using [feature flags](/docs/features/feature-flags). However, we're now rolling out a new UX for creating actions to all PostHog users, so try it out let us know what you think!
+
+- [New operations for numerical properties](https://github.com/PostHog/posthog/pull/2630)
+
+In addition to the average, sum, maximum, and minimum operations available to numerical properties in trends, we now also support median, and 90th, 95th, and 99th percentiles.
+
+#### [Full Release Notes](https://posthog.com/blog/the-posthog-array-1-19-0)
+
+### 1.18.0 - Monday 30 November 2020
+
+Our primary goals for this release were to iron out bugs and improve the user experience of our Beta features.
+
+As a result, we fixed **a whole lot of stuff**. We merged dozens of PRs with session recording fixes and improvements, and a dozen more with updates to our plugins functionality. We also improved things like event ingestion, the UX for feature flags, and our settings for both organizations and projects. You can read through the entire list of fixes [on our website](https://posthog.com/blog/the-posthog-array-1-18-0#bug-fixes-and-performance-improvements), but beware: it's quite long.
+
+- [New Event Selection Box](https://github.com/PostHog/posthog/pull/2394)
+
+![Events Box Screenshot](https://posthog.com/static/f0cb8a60445756b897447700d38f0ed5/2cefc/events-box.png)
+
+We upgraded our event selection box to include actions and events in one, as well as provide smarter recommendations of events and actions you might want to use of based frequently used in queries by you or your team.
+
+- [Improvements to posthog-js](https://github.com/PostHog/posthog-js)
+
+A new version of `posthog-js` is available and we recommend you to update if you've installed it via `npm`. Snippet users have access to the latest version by default.
+
+The new version includes a lot of bugfixes that improve our session recording feature, as well as is significantly lighter, having had [a lot of legacy code removed](https://github.com/PostHog/posthog-js/pull/128). 
+
+R.I.P. to the hundreds of lines of JavaScript that were removed - you will not be missed.
+
+- [Plugins are now available on Kubernetes deployments](https://github.com/PostHog/charts/pull/24)
+
+Following feedback from a user, we have now added support for [PostHog Plugins](https://posthog.com/docs/plugins/overview) to our Helm chart. 
+
+If you're using the chart to deploy PostHog, upgrading to the latest version will give you access to the new plugin server (Beta).
+
+- [Session Recording Improvements](https://github.com/PostHog/posthog/pulls?q=is%3Apr+is%3Aclosed+session)
+
+Out of the many improvements to session recording, there are some worth mentioning specifically:
+
+- Keyboard shortcuts for the session recording player (`spacebar` to pause/play, `f` to open player in full screen)
+- Ability to jump back/forward 8 seconds with the keyboard arrows (or player button)
+- Full-screen support for the session recording player without losing the controls bar
+- Pause/Play recording when clicking on the video
+- Skipping inactivity made clearer with an overlay over the player
+- The session recording player is now responsive to the client's screen size
+- Incomplete session recordings (i.e. "blank screens") are now hidden from the list 
+
+### 1.17.0 - Tuesday 17 November 2020
+
+- [Sentry Integration](https://github.com/PostHog/posthog/pull/1833)
+
+![Sentry Screenshot](https://posthog.com/static/85a8c81d33e2e3647657b389c0b12814/2cefc/sentry.png)
+
+An important part of developing a great user experience is identifying, tracking, and fixing bugs. 
+
+With our new [Sentry](https://sentry.io/) integration, you can (i) leverage PostHog data to help your debugging (ie to see the user's event history or to watch a session recording), and (ii) use Sentry exception data to quickly spot if errors are affecting your product metrics (ie to see if errors are causing churned users).
+
+As a two-way integration, it:
+- Adds a direct link in Sentry to the profile of the person affected in PostHog
+- Sends an `$exception` event to PostHog with a direct link to Sentry
+
+If you're unfamiliar with Sentry, we highly recommend you to check it out - it is an awesome application monitoring platform of which we're avid users at PostHog.
+
+To set up the integration you can read the step-by-step instructions on the dedicated [Sentry Integration page](https://posthog.com/docs/integrations/sentry-integration).
+
+- [RudderStack Integration](https://docs.rudderstack.com/destinations/posthog)
+
+RudderStack is an open-source, warehouse-first, customer data platform for developers. It allows you to collect and deliver customer event data to a variety of destinations such as data warehouses and analytics platforms.
+
+As of last week, PostHog is now available as a destination on RudderStack, allowing you to send your event data from various sources into PostHog for performing product analytics. 
+
+You can read more about RudderStack on [their website](https://rudderstack.com/), and learn how to integrate PostHog through their [comprehensive integration docs](https://docs.rudderstack.com/destinations/posthog). 
+
+- [Plugin Attachments and GeoIP Plugin](https://github.com/PostHog/posthog/pull/2263)
+
+![MaxMind Plugin Page Screenshot](https://posthog.com/static/db00f5bcf26ff68ad3e8fe14cde54dcb/2cefc/maxmind-plugin.png)
+
+Over the past two weeks, our [Plugins](https://posthog.com/docs/plugins/overview) feature was extensively worked on to improve the experience of using and developing plugins for PostHog. 
+
+One of the main changes was the addition of plugin attachments, which allow you to upload files that are used in the configuration of the plugin, vastly expanding the realm of possibilities of what plugins can do. 
+
+As a result of this, we built the [PostHog MaxMind Plugin](https://posthog.com/docs/plugins/maxmind), leveraging attachments to allow GeoIP data to be used for enriching your events. Once configured, the plugin adds IP-based location information as properties on your events, such as what country and city your users are located in, making it possible to create charts and tables filtered based on the location of your users.
+
+> **Note:** Plugins are currently only available on self-hosted instances. If you're self-hosting and want to use the PostHog MaxMind Plugin, please follow [these instructions](https://posthog.com/docs/plugins/maxmind). If you want to build your own plugin, check out our [fresh new guide](https://posthog.com/docs/plugins/build) on how to do so.
+
+- [Retentions & Paths Dashboard Panels](https://github.com/PostHog/posthog/pull/2201)
+
+![Retention Panel Screenshot](https://posthog.com/static/adc21b7a7d974cc268481fd4d55b2c29/2cefc/retention-panel.png)
+
+Dashboards are a key part of PostHog, so it's important to us that you can have an overview of as many as possible of your metrics in them.
+
+As such, the user paths graph and the retention table can now be added as panels on dashboards, making it so that every single chart, table, funnel, and graph you create in PostHog can make it to your dashboards now. 
+
+- [First Time Retention](https://github.com/PostHog/posthog/pull/2325)
+
+![First Time Retention Screenshot](https://posthog.com/static/61a2f75d668da309c8800cfc2b4478c7/2cefc/first-time-retention.png)
+
+Following some feedback from our own Growth Engineer on what functionality we need for ourselves at PostHog, we have now extended the functionality of our 'Retention' view, adding first time retention and differentiating between 'Cohortizing' and 'Retaining' events.
+
+In short, first time retention cohortizes users based on when they did an event for the **first time**, rather than adding a user to each cohort they had the event in. Additionally, by being able to have different target events for the cohort and the retention, you are able to track the impact of 'Event A' on the retention of 'Event B', exploring hypotheses such as how users who read your documentation retain on product pageviews when compared to other users.
+
+- [New Events & Actions View](https://github.com/PostHog/posthog/pull/2319)
+
+![Manage Events View Screenshot](https://posthog.com/static/73e3d54092192d20c9f686152685a82e/2cefc/manage-events.png)
+
+In an effort to make it easier to filter through your events in PostHog and tag events that you find useful, we have now consolidated 'Events' and 'Actions' into one single view, found on the left sidebar as 'Events & Actions'.
+
+On this page, you'll be able to manage everything related to your events, from inspecting their properties, to tagging them as actions. In addition, we have also added stats for your event and property volumes, so you can dig deeper into your analytics data collection, and optimize it to your needs.
+
+- [Improved AWS CloudFormation Deployment](https://github.com/PostHog/deployment/pulls?q=is%3Apr+is%3Aclosed)
+
+Following a lot of great user feedback, we have now significantly improved our [AWS CloudFormation Deployment](https://posthog.com/docs/deployment/deploy-aws).
+
+We have now added configuration for relevant alerts and RDS disk size, as well as improved the setup flow and added automatic `SECRET_KEY` generation. If you're happy with the standard config, deploying with AWS is now just a matter of "click, click, click", as described by Karl, one of our engineers.
+
+
+### 1.16.0 - Wednesday 4 November 2020
+
+- [Session Recording (Beta)](https://github.com/PostHog/posthog/issues/1846)
+
+![Session Recording Page Screenshot](https://posthog.com/static/dec14fdf98d81deada734c03126d482f/2cefc/session-recording.png)
+
+Given that our mission at PostHog is to increase the number of successful projects in the world, session recording felt like a feature that fits in perfectly with that goal.
+
+PostHog already provides various features to help you understand and improve your UX - but watching real users use your product is a _whole other ball game_. 
+
+With PostHog's session recording, you are able to truly feel the pain points of your users first-hand, seeing where they get stuck, debugging exceptions faster, and making your UX smoother. 
+
+![Session Recording Screenshot](https://posthog.com/static/677bd4dc1f4ff4c2b0b2509e66f1e7ea/2cefc/session-recording-ss.png)
+
+Additionally, you can do so while still preserving the privacy of your users, by determining what shouldn't be captured, as well as being able to turn session recording on and off as you wish.
+
+However, please note that our session recording feature is in **Beta** at the moment. This means that it can be unstable and have bugs. To report bugs you find while using it, please [open an issue for us on GitHub](https://github.com/PostHog/posthog/issues). 
+
+If you have posthog-js [installed via npm](https://www.npmjs.com/package/posthog-js) you will need to update to latest version. 
+
+
+- [Plugins (Beta)](https://github.com/PostHog/posthog/issues/1896)
+
+![Plugins Screenshot](https://posthog.com/static/f84e34e19a7715f563dabe7c2d3ca823/2cefc/plugins.png)
+
+Plugins is another **Beta** feature that we're extremely excited for. Currently only available for self-hosted instances, plugins allow you to add additional logic to your event processing pipeline, in order to do things like enrich your data or send it somewhere else, for instance to a data warehouse. 
+
+At the moment, we have created a few example plugins for you to test out the functionality, and have the intention of launching more for the next release. We will also be launching tutorials on how to make your own plugins, so stay tuned for that.
+
+As of right now, if you're on a self-hosted instance, you should head over to 'Project' -> 'Plugins' to enable the functionality. You can start testing it out with our "Hello World" plugin, which adds a property to your events called `foo` with a value that is up to you to decide in setup. 
+
+We also have built plugins for currency normalization and GeoIP data, allowing you to convert currency values in events according to up-to-date exchange rates and determine the location of an event based on the user's IP.
+
+Our overall vision for plugins is to enable seamless integration with other relevant data analytics platforms, as well as allow users to more easily customize PostHog's functionality by adding their own logic and data to the event pipeline.
+
+Finally, as is the case with session recording, please report any bugs in the functionality on [GitHub](https://github.com/PostHog/posthog/issues).
+
+
+- [Multiple Projects](https://github.com/PostHog/posthog/pull/1562)
+
+![Multiple Projects Screenshot](https://posthog.com/static/821f1e938621ad7d37e1ce0e9a3704a9/2cefc/org-project.png)
+
+You asked and we delivered!
+
+As per feedback from many in our community, PostHog now offers support for managing multiple projects under one "umbrella" organization. 
+
+This allows you to segregate concerns, such as keeping tracking for your dev and prod environments separately, as well as track multiple domains and apps without mixing data.  
+
+In addition, we also enhanced our invite and permissioning system as a by-product of this feature. 
+
+As this is an Enterprise Edition feature, please contact us at _sales@posthog.com_ if you are interested in using it.
+
+- [Dashboard Templates](https://github.com/PostHog/posthog/pull/1942)
+
+![Dashboard Templates Screenshot](https://posthog.com/static/1430069845eb4f0a34a7d4afc9b9fa30/2cefc/dashboard-template.png)
+
+In order to make it easier to create valuable dashboards to keep track of your business metrics, PostHog now offers the option to create new dashboards based on a template. We will be expanding the power of dashboard templates, but, as of right now, you can already create a dashboard using our web app dashboard template, which provides you with a good starting point for determining and tracking relevant metrics.
+
+- [Setup Improvements](https://github.com/PostHog/posthog/pull/1990)
+
+![Google Login Screenshot](https://posthog.com/static/14e1269485fcf90f90e761b1accbeb34/2cefc/google-login.png)
+
+In addition to GitHub and GitLab authentication, PostHog now supports signup and login with Google accounts! 
+
+We also improved our setup process by better structuring our settings pages, allowing you to [change your project's token](https://github.com/PostHog/posthog/pull/2015), and [enhancing the UX for empty states on dashboards](https://github.com/PostHog/posthog/pull/2068).
+
+- [Documentation Level Up](https://github.com/PostHog/posthog.com)
+
+![Docs Screenshot](https://posthog.com/static/5b1046b5a6615c1cd91af2519b8d603d/2cefc/docs.png)
+
+We have been working hard to improve our product documentation and had a few big upgrades recently:
+
+- Our Docs now have a Dark Mode option
+- You can search our entire documentation without ever using your mouse
+- We are actively releasing new tutorials on how to use PostHog to track key metrics and improve your product
+- Our Docs pages now load faster
+- New screenshots have been added throughout the Docs, as well as functionality walkthrough videos
+
+…and a lot more!
+
+If you have any suggestions for new tutorials or improvements to our documentation, [do not hesitate to let us know!](https://github.com/PostHog/posthog.com/issues)
+
+We’re working hard to improve PostHog and would love to talk to you about your experience with the product.
+If you're interested in helping us out, you can schedule a quick 30-min call with us [on Calendly](https://calendly.com/posthog-feedback). 
+
+Oh, and we're giving away some awesome [PostHog merch](https://merch.posthog.com) as a thank you!
+
+## Bug Fixes and Performance Improvements
+
+- Retention UX fixes [\#2168](https://github.com/PostHog/posthog/pull/2168) ([EDsCODE](https://github.com/EDsCODE))
+- Simplify action queries [\#2167](https://github.com/PostHog/posthog/pull/2167) ([timgl](https://github.com/timgl))
+- Prune person materialized [\#2166](https://github.com/PostHog/posthog/pull/2166) ([EDsCODE](https://github.com/EDsCODE))
+- Switch to the official Heroku Python buildpack [\#2151](https://github.com/PostHog/posthog/pull/2151) ([edmorley](https://github.com/edmorley))
+- Slim down dev docker image [\#2147](https://github.com/PostHog/posthog/pull/2147) ([timgl](https://github.com/timgl))
+- Clickhouse binary capture [\#2146](https://github.com/PostHog/posthog/pull/2146) ([timgl](https://github.com/timgl))
+- Fix funnel loading and other UX issues [\#2134](https://github.com/PostHog/posthog/pull/2134) ([timgl](https://github.com/timgl))
+- Fix elements chain with bad classes [\#2133](https://github.com/PostHog/posthog/pull/2133) ([timgl](https://github.com/timgl))
+- Fix social auth account creation [\#2123](https://github.com/PostHog/posthog/pull/2123) ([Twixes](https://github.com/Twixes))
+- Flatten array and check length for actions [\#2120](https://github.com/PostHog/posthog/pull/2120) ([EDsCODE](https://github.com/EDsCODE))
+- \[Clickhouse\] speed up sessions list [\#2118](https://github.com/PostHog/posthog/pull/2118) ([timgl](https://github.com/timgl))
+- Fix for action/event dropdown [\#2117](https://github.com/PostHog/posthog/pull/2117) ([EDsCODE](https://github.com/EDsCODE))
+- Make DELETE synchronous in clickhouse tests / make tests less flaky [\#2116](https://github.com/PostHog/posthog/pull/2116) ([macobo](https://github.com/macobo))
+- Capture social\_create\_user exception with Sentry [\#2115](https://github.com/PostHog/posthog/pull/2115) ([Twixes](https://github.com/Twixes))
+- Clarify invite creation [\#2113](https://github.com/PostHog/posthog/pull/2113) ([Twixes](https://github.com/Twixes))
+- \[Clickhouse\] More speed optimizations for funnels [\#2109](https://github.com/PostHog/posthog/pull/2109) ([timgl](https://github.com/timgl))
+- Fix changelog images [\#2105](https://github.com/PostHog/posthog/pull/2105) ([yakkomajuri](https://github.com/yakkomajuri))
+- Debug redis leak [\#2102](https://github.com/PostHog/posthog/pull/2102) ([mariusandra](https://github.com/mariusandra))
+- Clickhouse improve funnel speed [\#2100](https://github.com/PostHog/posthog/pull/2100) ([timgl](https://github.com/timgl))
+- Reduce Heroku worker thread count [\#2092](https://github.com/PostHog/posthog/pull/2092) ([mariusandra](https://github.com/mariusandra))
+- Wire up the length to the proto message [\#2089](https://github.com/PostHog/posthog/pull/2089) ([fuziontech](https://github.com/fuziontech))
+- Start with a new topic [\#2088](https://github.com/PostHog/posthog/pull/2088) ([fuziontech](https://github.com/fuziontech))
+- Provide required proto message length for our clickhouse overlords [\#2087](https://github.com/PostHog/posthog/pull/2087) ([fuziontech](https://github.com/fuziontech))
+- Clickhouse window funnel [\#2086](https://github.com/PostHog/posthog/pull/2086) ([timgl](https://github.com/timgl))
+- Protobufize events to protect from malformed JSON [\#2085](https://github.com/PostHog/posthog/pull/2085) ([fuziontech](https://github.com/fuziontech))
+- \#2083 Ignore result [\#2084](https://github.com/PostHog/posthog/pull/2084) ([timgl](https://github.com/timgl))
+- Add CH Person Sessions By Day [\#2082](https://github.com/PostHog/posthog/pull/2082) ([yakkomajuri](https://github.com/yakkomajuri))
+- Fix bin/tests too many files watching error [\#2078](https://github.com/PostHog/posthog/pull/2078) ([timgl](https://github.com/timgl))
+- Fix retention label and add tests [\#2076](https://github.com/PostHog/posthog/pull/2076) ([EDsCODE](https://github.com/EDsCODE))
+- Make possible CI optimizations [\#2074](https://github.com/PostHog/posthog/pull/2074) ([Twixes](https://github.com/Twixes))
+- Attempt to speed up 3.9 tests [\#2073](https://github.com/PostHog/posthog/pull/2073) ([macobo](https://github.com/macobo))
+- Fix cypress tests [\#2070](https://github.com/PostHog/posthog/pull/2070) ([macobo](https://github.com/macobo))
+- Give staff users superuser permissions [\#2069](https://github.com/PostHog/posthog/pull/2069) ([Twixes](https://github.com/Twixes))
+- Fix loading people and stickiness [\#2067](https://github.com/PostHog/posthog/pull/2067) ([EDsCODE](https://github.com/EDsCODE))
+- Improved settings for session recording [\#2066](https://github.com/PostHog/posthog/pull/2066) ([macobo](https://github.com/macobo))
+- Fix History button layout in Insights [\#2065](https://github.com/PostHog/posthog/pull/2065) ([Twixes](https://github.com/Twixes))
+- Fixes bad timerange for retentino [\#2064](https://github.com/PostHog/posthog/pull/2064) ([EDsCODE](https://github.com/EDsCODE))
+- Autoimport celery tasks [\#2062](https://github.com/PostHog/posthog/pull/2062) ([macobo](https://github.com/macobo))
+- Limit ingestion for teams [\#2060](https://github.com/PostHog/posthog/pull/2060) ([fuziontech](https://github.com/fuziontech))
+- Clickhouse never calculate action [\#2059](https://github.com/PostHog/posthog/pull/2059) ([timgl](https://github.com/timgl))
+- Bump cryptography from 2.9 to 3.2 [\#2058](https://github.com/PostHog/posthog/pull/2058) ([dependabot[bot]](https://github.com/apps/dependabot))
+- Clickhouse move to JSON extract for all filters [\#2056](https://github.com/PostHog/posthog/pull/2056) ([timgl](https://github.com/timgl))
+- Fix cohorts clickhouse [\#2052](https://github.com/PostHog/posthog/pull/2052) ([timgl](https://github.com/timgl))
+- Fix flaky test [\#2048](https://github.com/PostHog/posthog/pull/2048) ([EDsCODE](https://github.com/EDsCODE))
+- Upgrade kea-router and typegen [\#2044](https://github.com/PostHog/posthog/pull/2044) ([mariusandra](https://github.com/mariusandra))
+- Use jsonextract for steps in funnel query [\#2040](https://github.com/PostHog/posthog/pull/2040) ([EDsCODE](https://github.com/EDsCODE))
+- Use uuids in funnels for consistency [\#2036](https://github.com/PostHog/posthog/pull/2036) ([timgl](https://github.com/timgl))
+- \[Clickhouse\] fix events for action with no steps [\#2035](https://github.com/PostHog/posthog/pull/2035) ([timgl](https://github.com/timgl))
+- Fix funnels with multiple property filters [\#2034](https://github.com/PostHog/posthog/pull/2034) ([timgl](https://github.com/timgl))
+- Restore original retention query [\#2029](https://github.com/PostHog/posthog/pull/2029) ([EDsCODE](https://github.com/EDsCODE))
+- Filter person\_distinct\_id table further before joining [\#2028](https://github.com/PostHog/posthog/pull/2028) ([EDsCODE](https://github.com/EDsCODE))
+- Fix typescript errors \#1 [\#2027](https://github.com/PostHog/posthog/pull/2027) ([mariusandra](https://github.com/mariusandra))
+- Remove useless User.is\_superuser [\#2026](https://github.com/PostHog/posthog/pull/2026) ([Twixes](https://github.com/Twixes))
+- Get rid of Py 3.7-incompatible typing.Literal [\#2025](https://github.com/PostHog/posthog/pull/2025) ([Twixes](https://github.com/Twixes))
+- Update person property filtering [\#2024](https://github.com/PostHog/posthog/pull/2024) ([EDsCODE](https://github.com/EDsCODE))
+- Add eslint rule for empty JSX elements [\#2023](https://github.com/PostHog/posthog/pull/2023) ([mariusandra](https://github.com/mariusandra))
+- Fix click outside spam & public paths [\#2022](https://github.com/PostHog/posthog/pull/2022) ([mariusandra](https://github.com/mariusandra))
+- \[Clickhouse\] Fix action filtering on events [\#2013](https://github.com/PostHog/posthog/pull/2013) ([timgl](https://github.com/timgl))
+- Add types to window.posthog [\#2012](https://github.com/PostHog/posthog/pull/2012) ([macobo](https://github.com/macobo))
+- Rename existing projects to "Default Project" [\#2009](https://github.com/PostHog/posthog/pull/2009) ([Twixes](https://github.com/Twixes))
+- Enable compatibility with old Team signup links [\#2007](https://github.com/PostHog/posthog/pull/2007) ([Twixes](https://github.com/Twixes))
+- Add tests to important query builders [\#2006](https://github.com/PostHog/posthog/pull/2006) ([EDsCODE](https://github.com/EDsCODE))
+- Put organization switcher under user [\#2005](https://github.com/PostHog/posthog/pull/2005) ([Twixes](https://github.com/Twixes))
+- Fix links [\#2004](https://github.com/PostHog/posthog/pull/2004) ([Twixes](https://github.com/Twixes))
+- Cohorts Test [\#2003](https://github.com/PostHog/posthog/pull/2003) ([mariusandra](https://github.com/mariusandra))
+- Patch broken link from changed path [\#2002](https://github.com/PostHog/posthog/pull/2002) ([EDsCODE](https://github.com/EDsCODE))
+- Fix cohort page link [\#2000](https://github.com/PostHog/posthog/pull/2000) ([mariusandra](https://github.com/mariusandra))
+- Break down feature\_flag\_response and add to propertykeyinfo [\#1991](https://github.com/PostHog/posthog/pull/1991) ([timgl](https://github.com/timgl))
+- Make PostHog compatibile with Python 3.9 [\#1987](https://github.com/PostHog/posthog/pull/1987) ([Twixes](https://github.com/Twixes))
+- Use posthog.js correctly in userLogic [\#1975](https://github.com/PostHog/posthog/pull/1975) ([macobo](https://github.com/macobo))
+- \[Clickhouse\] Fix grabbing by person [\#1960](https://github.com/PostHog/posthog/pull/1960) ([timgl](https://github.com/timgl))
+- Add new person materialized [\#1944](https://github.com/PostHog/posthog/pull/1944) ([EDsCODE](https://github.com/EDsCODE))
+
+### 1.15.1 - Thursday 22 October 2020
+
+- Fixed issue where 100s of emails would be sent. (oops!)
+- Fixed performance issues with Redis caches filling up.
+
+### 1.15.0 - Thursday 15 October 2020
 
 - [ClickHouse 👆🏠](https://github.com/PostHog/posthog/pulls?page=1&q=is%3Apr+clickhouse+is%3Aclosed)
 
-![Clickhouse Screenshot](https://posthog.com/static/497eaa939ba2d66d6e2492a3631d468f/2cefc/clickhouse.png)
+![Clickhouse Screenshot](https://posthog.com/static/bf2c9d775b519ae2132048751c1909b0/2cefc/clickhouse.png)
 
 If you've followed our progress on GitHub over the past months, you'll know that ClickHouse has been the talk of the town.
 
@@ -20,7 +466,7 @@ If you're interested in using PostHog with ClickHouse, send us an email at _sale
 
 - [Command Palette](https://github.com/PostHog/posthog/pull/1819)
 
-![Command Palette Screenshot](https://posthog.com/static/8513e8c18553e4fc9a3e6948dab5c35b/2cefc/command-palette.png)
+![Command Palette Screenshot](https://posthog.com/static/8e2f200d5ba2252b33f4bdb20784d614/2cefc/command-palette.png)
 
 <br />
 
@@ -36,7 +482,7 @@ Stay tuned for more exciting features that were built during the hackathon.
 
 - [Backend Feature Flags](https://github.com/PostHog/posthog-python/pull/9)
 
-![Backend Feature Flags Code](https://posthog.com/static/b12efdcc6c415513af002951f35c8528/2cefc/backend-flags.png)
+![Backend Feature Flags Code](https://posthog.com/static/5dfed95825588d03f88309c661539326/2cefc/backend-flags.png)
 
 Based on community feedback, we made it easier for feature flags to be integrated with your backend, in addition to our frontend JavaScript implementation.
 
@@ -46,7 +492,7 @@ We have ourselves been using feature flags with the Python integration to slowly
 
 - [Weekly Report Email](https://github.com/PostHog/posthog/pull/1700)
 
-![Weekly Email Screenshot](https://posthog.com/static/054f1fcbdb9fcb12383b34c0019f5966/2cefc/weekly-email.png)
+![Weekly Email Screenshot](https://posthog.com/static/b2f8999a674c1be5307cafd5bc760070/2cefc/weekly-email.png)
 
 To help users keep up with their key metrics in a simple way, we have introduced a weekly email that gives you an overview of your active and churned users over the previous week.
 
@@ -242,9 +688,9 @@ To ensure the security of your PostHog instance, it's important that you use a r
 
 Prior to this version, we denoted the importance of this in our Docs, but did not enforce it in our software. Now, to enhance security, PostHog will not allow you to run the server without setting it.
 
-Many of our deployments generate and set this key by default, so that you will not need to worry about it. This is the case with our [Heroku One-Click deployment](/docs/deployment/deploy-heroku), for example. However, other methods may not automatically do this (we're working on it!). As such, if you run into any issues when updating PostHog, make sure you have a unique `SECRET_KEY` set. 
+Many of our deployments generate and set this key by default, so that you will not need to worry about it. This is the case with our [Heroku One-Click deployment](https://posthog.com/docs/deployment/deploy-heroku), for example. However, other methods may not automatically do this (we're working on it!). As such, if you run into any issues when updating PostHog, make sure you have a unique `SECRET_KEY` set. 
 
-You can find more information about this on our ['Securing PostHog' page](/docs/configuring-posthog/securing-posthog#secret-key) and should always feel welcome to ask any questions on our [community Slack group](https://join.slack.com/t/posthogusers/shared_invite/enQtOTY0MzU5NjAwMDY3LTc2MWQ0OTZlNjhkODk3ZDI3NDVjMDE1YjgxY2I4ZjI4MzJhZmVmNjJkN2NmMGJmMzc2N2U3Yjc3ZjI5NGFlZDQ).
+You can find more information about this on our ['Securing PostHog' page](https://posthog.com/docs/configuring-posthog/securing-posthog#secret-key) and should always feel welcome to ask any questions on our [community Slack group](https://join.slack.com/t/posthogusers/shared_invite/enQtOTY0MzU5NjAwMDY3LTc2MWQ0OTZlNjhkODk3ZDI3NDVjMDE1YjgxY2I4ZjI4MzJhZmVmNjJkN2NmMGJmMzc2N2U3Yjc3ZjI5NGFlZDQ).
 
 
 ## Bug Fixes and Performance Improvements
@@ -454,7 +900,7 @@ Clicking on any section in the retention table will tell you exactly what users 
 
 - Many toolbar fixes.
 
-![heatmap](../images/casts/heatmap.gif)
+![heatmap](https://posthog.com/images/429b37ae1bb9cc559ade21c81b56a687/heatmap.gif)
 
 #### Bug fixes and performance improvements
 
@@ -482,28 +928,28 @@ Clicking on any section in the retention table will tell you exactly what users 
 
 - It's like inspect element, but for user data.
 
-![inspect](https://posthog.com/images/3ce1232ef29d0d59b4ac2779d8e97cf8/inspect.gif)
+![inspect](https://posthog.com/images/c9709b954e8ea19cf23a633eb35cac05/inspect.gif)
 
 - Easily see the ranking of which parts of the page your users are interacting with the most:
 
-![heatmap](https://posthog.com/images/782d9d2142c331403efdbec7ebd56145/heatmap.gif)
+![heatmap](https://posthog.com/images/429b37ae1bb9cc559ade21c81b56a687/heatmap.gif)
 
 - We learned a ton about our product and website within minutes of trying this out.
 
-![toolbar dance](https://posthog.com/images/55fe4bbc5e8fbc428fe4f1830f3d280c/dance.gif)
+![toolbar dance](https://posthog.com/images/1f1984b6926d02444eef3148293c72af/dance.gif)
 
 #### Feature flags
 
 - Feature flags let you roll out changes to users with a certain property, or to a percentage of users, or some combo of the two.
 
-![feature flags](https://posthog.com/static/2824e49b2d3200ba4260a1bb83edb6ad/db910/feature-flags.png)
+![feature flags](https://posthog.com/static/99083b2fefbe9b348c4150c0964d474e/db910/feature-flags.png)
 
 #### Other exciting, enthralling and invigorating features
 
 - Flutter Integration. You asked for it and now [it's here](https://posthog.com/docs/integrations/flutter-integration)!
 - Retention page. PostHog already had stickiness, but now there is a table that demonstrates perhaps more clearly how your users are coming back (or not!)
 
-![retention view](https://posthog.com/static/c72806fa990efb5ea9bcf852c9ba9ffe/dc333/retention-view.png)
+![retention view](https://posthog.com/static/33cdb2d1cd630a44b67da0425ca639e3/dc333/retention-view.png)
 
 - Better onboarding. We've had a go at redoing how our set up flow works, and will be tracking if it helps more people get through PostHog's own funnel!
 - Platform.sh deployment. A very simple, new and trendy way to get up and running!
@@ -539,7 +985,7 @@ Clicking on any section in the retention table will tell you exactly what users 
 ### 1.9.0 - Thursday 18 June 2020
 
 - [Sessions view](https://github.com/PostHog/posthog/pull/926)
-![sessions overview](https://posthog.com/static/b64e1508790f6b60958d5d320f2b8a22/efc66/sessions-overview.png)
+![sessions overview](https://posthog.com/static/bdce507cbee394ad12a0a86695889f5f/2cefc/sessions-overview.png)
 - You can then see exactly how a user interacted with your app:
 ![sessions more detail](https://posthog.com/static/c4fe51ff11bbe87eb64c00daf7cc3d78/efc66/session-broken-out.png)
 This should really help with debugging, or just trying to get a detailed view of what users are up to.
@@ -562,7 +1008,7 @@ This should really help with debugging, or just trying to get a detailed view of
 * We worked hard on improving caching to speed things up. We [fixed cache refreshing](https://github.com/PostHog/posthog/pull/1035) in a few areas, we made a few [caching adjustments](https://github.com/PostHog/posthog/pull/1023) to fix #1022. Finally, we now use [redis to cache results](https://github.com/PostHog/posthog/pull/972).
 * Save time! You can now [create actions from the trends page](https://github.com/PostHog/posthog/pull/990).
 * [Upgrade to posthog-js 1.2.0 to support dynamic params](https://github.com/PostHog/posthog/pull/957).
-* We fixed long href inserts - the href [can now go up to 2048 characters](https://github.com/PostHog/posthog/pull/1027) before truncation. Someone must have had some funky urls going on...
+* We fixed long href inserts - the href [can now go up to 2048 characters](https://github.com/PostHog/posthog/pull/1027) before truncation. Someone must have had some funky urls going on…
 * [We prevented intermittent issues with yarn build](https://github.com/PostHog/posthog/pull/1026)
 * We [fixed a bug](https://github.com/PostHog/posthog/pull/1021) that caused cohorts to fail when actions were deleted
 * We [solved a problem](https://github.com/PostHog/posthog/pull/980) with comparing trend sessions distribution
@@ -589,7 +1035,7 @@ This should really help with debugging, or just trying to get a detailed view of
 
 - [Cumulative graphs](https://github.com/PostHog/posthog/pull/862)
 
-![cumulative graphs](https://posthog.com/images/8b9a5516ddcc2ac7030b690273ed7e8e/cumulative-graph.gif)
+![cumulative graphs](https://posthog.com/images/bfe6baa6ab1a5cac9ca7a74a9d920a7c/cumulative-graph.gif)
 
 - [More powerful paths](https://github.com/PostHog/posthog/pull/897)
 
@@ -625,12 +1071,12 @@ This should really help with debugging, or just trying to get a detailed view of
 - [Reactive Native](https://github.com/PostHog/posthog-react-native)
 - [Comparison charts](https://github.com/PostHog/posthog/pull/824)
 
-![Comparison charts](https://posthog.com/images/a1571726df68831e4626a937a19821d0/side-by-side-comparison.gif)
+![Comparison charts](https://posthog.com/images/8fe8e9e7c6ac033b80ba06f9c3f36f98/side-by-side-comparison.gif)
 
 
 - [Tooltip: View the users inside each datapoint](https://github.com/PostHog/posthog/pull/830/commits/64e1ef34b5d8565934b1980d33432cef4e7002f7)
 
-![Hover breakdown](https://posthog.com/static/729a492575e82595e30266d63dc13765/c83ae/hover-breakdown.png)
+![Hover breakdown](https://posthog.com/static/5a29596c659e08c983fe803abd607f21/2cefc/hover-breakdown.png)
 
 - [Property keys explained](https://github.com/PostHog/posthog/pull/822)
 
@@ -674,7 +1120,7 @@ This should really help with debugging, or just trying to get a detailed view of
 - We fixed [property filter array issue](https://github.com/PostHog/posthog/pull/769)
 - [Optimize funnel rendering](https://github.com/PostHog/posthog/pull/792) is a major improvement in speed for those with many events - now 1 order of magnitude faster. 
 - [Multiple filters with same key](https://github.com/PostHog/posthog/pull/738), fixed a bug that means you can now have multiple filters that are the same ie $current_url doesn't equal A and $current_url doesn't equal B
-- [Event partioning](https://github.com/PostHog/posthog/pull/733), which speeds up trends and paths pages in particular. Learn more about [scaling PostHog](/docs/scaling-posthog).
+- [Event partioning](https://github.com/PostHog/posthog/pull/733), which speeds up trends and paths pages in particular. Learn more about [scaling PostHog](https://posthog.com/docs/scaling-posthog).
 - The component Deletewithundo wasn't working because of property mixup, [now it is](https://github.com/PostHog/posthog/pull/750)!
 - [Funnels](https://github.com/PostHog/posthog/pull/751) and [Actions](https://github.com/PostHog/posthog/pull/757) now use Ant Design
 - We temporarily [removed stickiness breakdowns](https://github.com/PostHog/posthog/pull/774), as they were causing issues.
@@ -1025,7 +1471,7 @@ Important! We've added Celery workers. We'll move tasks to workers to speed up a
 ![graph show numbers](https://posthog.com/wp-content/uploads/2020/03/image-1.png)
 - Allow multiple URLS when creating actions
 
-![multiple urls when creating actions](https://user-images.githubusercontent.com/53387/76166375-54751200-615e-11ea-889f-d0ec93356cf2.gif)
+![Multiple urls when creating actions](https://user-images.githubusercontent.com/53387/76166375-54751200-615e-11ea-889f-d0ec93356cf2.gif)
 - Better property filters
 
 ![image](https://user-images.githubusercontent.com/1727427/76364411-5831a180-62e2-11ea-81f1-f0c1832b7927.png)

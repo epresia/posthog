@@ -1,9 +1,11 @@
 import 'react-toastify/dist/ReactToastify.css'
 import '~/toolbar/styles.scss'
+import '~/global.scss' /* Contains PostHog's main styling configurations */
+import '~/antd.less' /* Imports Ant Design's components */
 
 import React from 'react'
 import ReactDOM from 'react-dom'
-import Simmer from '@mariusandra/simmerjs'
+import Simmer from '@posthog/simmerjs'
 import { getContext } from 'kea'
 import { Provider } from 'react-redux'
 import { initKea } from '~/initKea'

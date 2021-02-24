@@ -3,17 +3,15 @@ import { PropertyFilter } from './PropertyFilter'
 import { Button } from 'antd'
 import { useValues, useActions } from 'kea'
 import { propertyFilterLogic } from './propertyFilterLogic'
-import { cohortsModel } from '../../../models/cohortsModel'
-import { keyMapping } from 'lib/components/PropertyKeyInfo'
 import { Popover, Row } from 'antd'
-import { CloseButton, formatPropertyLabel } from 'lib/utils'
+import { CloseButton } from 'lib/components/CloseButton'
+import PropertyFilterButton from './PropertyFilterButton'
 import '../../../scenes/actions/Actions.scss'
 
 const FilterRow = React.memo(function FilterRow({
     item,
     index,
     filters,
-    cohorts,
     logic,
     pageKey,
     showConditionBadge,
@@ -31,7 +29,7 @@ const FilterRow = React.memo(function FilterRow({
     }
 
     return (
-        <Row align="middle" className="mt-2 mb-2">
+        <Row align="middle" className="mt-05 mb-05" data-attr={'property-filter-' + index}>
             <Popover
                 trigger="click"
                 onVisibleChange={handleVisibleChange}
@@ -41,11 +39,7 @@ const FilterRow = React.memo(function FilterRow({
                 content={<PropertyFilter key={index} index={index} onComplete={() => setOpen(false)} logic={logic} />}
             >
                 {key ? (
-                    <Button type="primary" shape="round" style={{ maxWidth: '75%' }}>
-                        <span style={{ width: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {formatPropertyLabel(item, cohorts, keyMapping)}
-                        </span>
-                    </Button>
+                    <PropertyFilterButton onClick={() => setOpen(!open)} item={item} />
                 ) : (
                     <Button type="default" shape="round" data-attr={'new-prop-filter-' + pageKey}>
                         Add filter
@@ -62,10 +56,7 @@ const FilterRow = React.memo(function FilterRow({
                 />
             )}
             {key && showConditionBadge && index + 1 < totalCount && (
-                <span
-                    style={{ marginLeft: 16, right: 16, position: 'absolute' }}
-                    className="match-condition-badge mc-and"
-                >
+                <span style={{ marginLeft: 16, right: 16, position: 'absolute' }} className="stateful-badge and">
                     AND
                 </span>
             )}
@@ -78,14 +69,13 @@ export function PropertyFilters({
     propertyFilters = null,
     onChange = null,
     pageKey,
-    showConditionBadges = false,
+    showConditionBadge = false,
 }) {
     const logic = propertyFilterLogic({ propertyFilters, endpoint, onChange, pageKey })
     const { filters } = useValues(logic)
-    const { cohorts } = useValues(cohortsModel)
 
     return (
-        <div className="column" style={{ marginBottom: '15px' }}>
+        <div className="mb">
             {filters &&
                 filters.map((item, index) => {
                     return (
@@ -96,9 +86,8 @@ export function PropertyFilters({
                             index={index}
                             totalCount={filters.length - 1} // empty state
                             filters={filters}
-                            cohorts={cohorts}
                             pageKey={pageKey}
-                            showConditionBadge={showConditionBadges}
+                            showConditionBadge={showConditionBadge}
                         />
                     )
                 })}

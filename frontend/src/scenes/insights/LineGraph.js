@@ -3,12 +3,13 @@ import { useActions, useValues } from 'kea'
 import Chart from 'chart.js'
 import PropTypes from 'prop-types'
 import { formatLabel } from '~/lib/utils'
-import { getChartColors } from 'lib/colors'
+import { getBarColorFromStatus, getChartColors } from 'lib/colors'
 import { useWindowSize } from 'lib/hooks/useWindowSize'
 import { toast } from 'react-toastify'
 import { Annotations, annotationsLogic, AnnotationMarker } from 'lib/components/Annotations'
 import { useEscapeKey } from 'lib/hooks/useEscapeKey'
 import moment from 'moment'
+import './Insights.scss'
 
 //--Chart Style Options--//
 // Chart.defaults.global.defaultFontFamily = "'PT Sans', sans-serif"
@@ -29,6 +30,7 @@ export function LineGraph({
     ['data-attr']: dataAttr,
     dashboardItemId,
     inSharedMode,
+    percentage,
 }) {
     const chartRef = useRef()
     const myLineChart = useRef()
@@ -111,10 +113,11 @@ export function LineGraph({
 
     function processDataset(dataset, index) {
         const colorList = getChartColors(color || 'white')
+        const borderColor = dataset?.status ? getBarColorFromStatus(dataset.status) : colorList[index]
 
         return {
-            borderColor: colorList[index],
-            backgroundColor: (type === 'bar' || type === 'doughnut') && colorList[index],
+            borderColor,
+            backgroundColor: (type === 'bar' || type === 'doughnut') && borderColor,
             fill: false,
             borderWidth: 1,
             pointHitRadius: 8,
@@ -129,7 +132,9 @@ export function LineGraph({
         const axisLineColor = color === 'white' ? '#ddd' : 'rgba(255,255,255,0.2)'
         const axisColor = color === 'white' ? '#999' : 'rgba(255,255,255,0.6)'
 
-        if (typeof myLineChart.current !== 'undefined') myLineChart.current.destroy()
+        if (typeof myLineChart.current !== 'undefined') {
+            myLineChart.current.destroy()
+        }
         // if chart is line graph, make duplicate lines and overlay to show dotted lines
         datasets =
             !type || type === 'line'
@@ -137,13 +142,13 @@ export function LineGraph({
                       ...datasets.map((dataset, index) => {
                           let datasetCopy = Object.assign({}, dataset)
                           let data = [...dataset.data]
-                          let labels = [...dataset.labels]
+                          let _labels = [...dataset.labels]
                           let days = [...dataset.days]
                           data.pop()
-                          labels.pop()
+                          _labels.pop()
                           days.pop()
                           datasetCopy.data = data
-                          datasetCopy.labels = labels
+                          datasetCopy.labels = _labels
                           datasetCopy.days = days
                           return processDataset(datasetCopy, index)
                       }),
@@ -159,8 +164,8 @@ export function LineGraph({
 
                           datasetCopy.data =
                               datasetCopy.data.length > 2
-                                  ? datasetCopy.data.map((datum, index) =>
-                                        index === datasetLength - 1 || index === datasetLength - 2 ? datum : null
+                                  ? datasetCopy.data.map((datum, idx) =>
+                                        idx === datasetLength - 1 || idx === datasetLength - 2 ? datum : null
                                     )
                                   : datasetCopy.data
                           return processDataset(datasetCopy, index)
@@ -185,7 +190,11 @@ export function LineGraph({
                               enabled: true,
                               intersect: false,
                               mode: 'nearest',
+                              // If bar, we want to only show the tooltip for what we're hovering over
+                              // to avoid confusion
+                              ...(type !== 'bar' ? { axis: 'x' } : {}),
                               bodySpacing: 5,
+                              position: 'nearest',
                               yPadding: 10,
                               xPadding: 10,
                               caretPadding: 0,
@@ -194,60 +203,82 @@ export function LineGraph({
                               titleFontColor: '#ffffff',
                               labelFontSize: 23,
                               cornerRadius: 4,
-                              fontSize: 16,
+                              fontSize: 12,
                               footerSpacing: 0,
                               titleSpacing: 0,
+                              footerFontStyle: 'italic',
                               callbacks: {
                                   label: function (tooltipItem, data) {
                                       let entityData = data.datasets[tooltipItem.datasetIndex]
-                                      if (entityData.dotted && !(tooltipItem.index === entityData.data.length - 1))
+                                      if (entityData.dotted && !(tooltipItem.index === entityData.data.length - 1)) {
                                           return null
-                                      var label = entityData.chartLabel || entityData.label || ''
+                                      }
+                                      const label = entityData.chartLabel || entityData.label || ''
+                                      const formattedLabel = entityData.action
+                                          ? formatLabel(label, entityData.action)
+                                          : label
                                       return (
-                                          (entityData.action ? formatLabel(label, entityData.action) : label) +
-                                          ' - ' +
-                                          tooltipItem.yLabel.toLocaleString()
+                                          (formattedLabel ? formattedLabel + ' — ' : '') +
+                                          tooltipItem.yLabel.toLocaleString() +
+                                          (percentage ? '%' : '')
                                       )
                                   },
+                                  footer: () => (dashboardItemId ? '' : 'Click to see users related to the datapoint'),
                               },
+                              itemSort: (a, b) => b.yLabel - a.yLabel,
                           },
                           hover: {
                               mode: 'nearest',
                               onHover(evt) {
                                   if (onClick) {
                                       const point = this.getElementAtEvent(evt)
-                                      if (point.length) evt.target.style.cursor = 'pointer'
-                                      else evt.target.style.cursor = 'default'
+                                      if (point.length) {
+                                          evt.target.style.cursor = 'pointer'
+                                      } else {
+                                          evt.target.style.cursor = 'default'
+                                      }
                                   }
                               },
                           },
                           scales: {
                               xAxes: [
-                                  {
-                                      display: true,
-                                      gridLines: { lineWidth: 0, color: axisLineColor, zeroLineColor: axisColor },
-                                      ticks: {
-                                          autoSkip: true,
-                                          beginAtZero: true,
-                                          min: 0,
-                                          fontColor: axisLabelColor,
-                                          precision: 0,
-                                          padding: annotationsLoading || !annotationInRange ? 0 : 35,
-                                      },
-                                  },
+                                  type === 'bar'
+                                      ? { stacked: true, ticks: { fontColor: axisLabelColor } }
+                                      : {
+                                            display: true,
+                                            gridLines: { lineWidth: 0, color: axisLineColor, zeroLineColor: axisColor },
+                                            ticks: {
+                                                autoSkip: true,
+                                                beginAtZero: true,
+                                                min: 0,
+                                                fontColor: axisLabelColor,
+                                                precision: 0,
+                                                padding: annotationsLoading || !annotationInRange ? 0 : 35,
+                                            },
+                                        },
                               ],
                               yAxes: [
-                                  {
-                                      display: true,
-                                      gridLines: { color: axisLineColor, zeroLineColor: axisColor },
-                                      ticks: {
-                                          autoSkip: true,
-                                          beginAtZero: true,
-                                          min: 0,
-                                          fontColor: axisLabelColor,
-                                          precision: 0,
-                                      },
-                                  },
+                                  type === 'bar'
+                                      ? { stacked: true, ticks: { fontColor: axisLabelColor } }
+                                      : {
+                                            display: true,
+                                            gridLines: { color: axisLineColor, zeroLineColor: axisColor },
+                                            ticks: percentage
+                                                ? {
+                                                      min: 0,
+                                                      max: 100, // Your absolute max value
+                                                      callback: function (value) {
+                                                          return value.toFixed(0) + '%' // convert it to percentage
+                                                      },
+                                                  }
+                                                : {
+                                                      autoSkip: true,
+                                                      beginAtZero: true,
+                                                      min: 0,
+                                                      fontColor: axisLabelColor,
+                                                      precision: 0,
+                                                  },
+                                        },
                               ],
                           },
                           onClick: (_, [point]) => {
@@ -299,15 +330,17 @@ export function LineGraph({
                         return
                     }
 
-                    const leftExtent = myLineChart.current.scales['x-axis-0'].left
-                    const rightExtent = myLineChart.current.scales['x-axis-0'].right
+                    const _leftExtent = myLineChart.current.scales['x-axis-0'].left
+                    const _rightExtent = myLineChart.current.scales['x-axis-0'].right
                     const ticks = myLineChart.current.scales['x-axis-0'].ticks.length
-                    const delta = rightExtent - leftExtent
-                    const interval = delta / (ticks - 1)
-                    if (offsetX < leftExtent - interval / 2) return
-                    const index = mapRange(offsetX, leftExtent - interval / 2, rightExtent + interval / 2, 0, ticks)
+                    const delta = _rightExtent - _leftExtent
+                    const _interval = delta / (ticks - 1)
+                    if (offsetX < _leftExtent - _interval / 2) {
+                        return
+                    }
+                    const index = mapRange(offsetX, _leftExtent - _interval / 2, _rightExtent + _interval / 2, 0, ticks)
                     if (index >= 0 && index < ticks && offsetY >= topExtent - 30) {
-                        setLeft(index * interval + leftExtent)
+                        setLeft(index * _interval + _leftExtent)
                         setLabelIndex(index)
                     }
                 }
@@ -349,10 +382,11 @@ export function LineGraph({
                         setSelectedDayLabel(datasets[0].days[labelIndex])
                     }}
                     onCreateAnnotation={(textInput, applyAll) => {
-                        if (applyAll)
+                        if (applyAll) {
                             createGlobalAnnotation(textInput, datasets[0].days[holdLabelIndex], dashboardItemId)
-                        else if (dashboardItemId) createAnnotationNow(textInput, datasets[0].days[holdLabelIndex])
-                        else {
+                        } else if (dashboardItemId) {
+                            createAnnotationNow(textInput, datasets[0].days[holdLabelIndex])
+                        } else {
                             createAnnotation(textInput, datasets[0].days[holdLabelIndex])
                             toast('This annotation will be saved if the graph is made into a dashboard item!')
                         }

@@ -3,14 +3,12 @@ import time
 
 from celery import shared_task
 
-from posthog.celery import app
-from posthog.ee import check_ee_enabled
 from posthog.models import Action
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task
+@shared_task(ignore_result=True)
 def calculate_action(action_id: int) -> None:
     start_time = time.time()
     action = Action.objects.get(pk=action_id)

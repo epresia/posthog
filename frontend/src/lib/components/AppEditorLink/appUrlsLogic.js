@@ -4,6 +4,7 @@ import { toParams } from 'lib/utils'
 import { appEditorUrl } from 'lib/components/AppEditorLink/utils'
 import { toast } from 'react-toastify'
 import { userLogic } from 'scenes/userLogic'
+import moment from 'moment'
 
 const defaultValue = 'https://'
 
@@ -22,9 +23,12 @@ export const appUrlsLogic = kea({
                 let params = {
                     events: [{ id: '$pageview', name: '$pageview', type: 'events' }],
                     breakdown: '$current_url',
+                    date_from: moment().subtract(3, 'days').toISOString(),
                 }
-                let data = await api.get('api/insight/trend/?' + toParams(params))
-                if (data[0]?.count === 0) return []
+                let data = (await api.get('api/insight/trend/?' + toParams(params))).data
+                if (data[0]?.count === 0) {
+                    return []
+                }
                 let domainsSeen = []
                 return data
                     .filter((item) => {
@@ -99,7 +103,9 @@ export const appUrlsLogic = kea({
     sharedListeners: ({ values }) => ({
         saveAppUrls: ({ value }) => {
             // Only show toast when clicking "Save"
-            if (value) toast('URLs saved', { toastId: 'EditAppUrls' })
+            if (value) {
+                toast('URLs saved', { toastId: 'EditAppUrls' })
+            }
             userLogic.actions.userUpdateRequest({ team: { app_urls: values.appUrls } }, 'SetupAppUrls')
         },
     }),

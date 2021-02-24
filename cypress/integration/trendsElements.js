@@ -11,9 +11,9 @@ describe('Trends actions & events', () => {
 
     it('Add a pageview action filter', () => {
         // when
-        cy.contains('Add action/event').click()
+        cy.contains('Add graph series').click()
         cy.get('[data-attr=trend-element-subject-1]').click()
-        cy.contains('Pageviews').click()
+        cy.contains('HogFlix homepage view').click()
 
         // then
         cy.get('[data-attr=trend-line-graph]').should('exist')
@@ -27,27 +27,32 @@ describe('Trends actions & events', () => {
 
     it('Show property select dynamically', () => {
         cy.get('[data-attr=math-property-selector-0]').should('not.exist')
+
+        // Test that the math selector dropdown is shown on hover
         cy.get('[data-attr=math-selector-0]').click()
-        cy.get('[data-attr=math-avg-0]').click()
-        cy.get('[data-attr=math-property-selector-0]').should('exist')
+        cy.get('[data-attr=math-total-0]').should('be.visible')
+
+        // Use `force = true` because clicking the element without dragging the mouse makes the dropdown disappear
+        cy.get('[data-attr=math-avg-0]').click({ force: true })
+        cy.get('[data-attr=math-property-select]').should('exist')
     })
 
     it('Apply specific filter on default pageview event', () => {
         cy.get('[data-attr=show-prop-filter-0]').click()
         cy.get('[data-attr=new-prop-filter-0-\\$pageview-filter]').click()
         cy.get('[data-attr=property-filter-dropdown]').click()
-        cy.get('[data-attr=prop-filter-event-1]').click()
-        cy.get('#rc_select_6').click()
-        cy.get('[data-attr=prop-val-0]').click()
+        cy.get('[data-attr=prop-filter-event-1]').click({ force: true })
+        cy.get('[data-attr=prop-val]').click()
+        cy.get('[data-attr=prop-val-0]').click({ force: true })
         cy.get('[data-attr=trend-line-graph]').should('exist')
     })
 
     it('Apply 1 overall filter', () => {
         cy.get('[data-attr=new-prop-filter-trends-filters]').click()
         cy.get('[data-attr=property-filter-dropdown]').click()
-        cy.get('[data-attr=prop-filter-event-1]').click()
+        cy.get('[data-attr=prop-filter-event-1]').click({ force: true })
         cy.get('[data-attr=prop-val]').click()
-        cy.get('[data-attr=prop-val-0]').click()
+        cy.get('[data-attr=prop-val-0]').click({ force: true })
 
         cy.get('[data-attr=trend-line-graph]', { timeout: 8000 }).should('exist')
     })
@@ -104,7 +109,7 @@ describe('Trends actions & events', () => {
 
     it('Apply all users cohort breakdown', () => {
         cy.get('[data-attr=add-breakdown-button]').click()
-        cy.contains('Cohort').click()
+        cy.get('[data-attr=breakdown-filter-content]').contains('Cohort').click()
         cy.get('[data-attr=cohort-breakdown-select]').click()
         cy.get('[data-attr=cohort-breakdown-all-users]').click()
 
@@ -113,7 +118,7 @@ describe('Trends actions & events', () => {
 
     it('Save to dashboard', () => {
         cy.get('[data-attr=save-to-dashboard-button]').click()
-        cy.get('.ant-input').type('Pageviews')
+        cy.get('.ant-input').type('Home page views')
         cy.get('form > .ant-select > .ant-select-selector').click()
         cy.get(':nth-child(1) > .ant-select-item-option-content').click()
         cy.contains('Add panel to dashboard').click()

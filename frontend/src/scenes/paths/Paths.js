@@ -7,6 +7,7 @@ import { EventElements } from 'scenes/events/EventElements'
 import * as d3 from 'd3'
 import * as Sankey from 'd3-sankey'
 import { AUTOCAPTURE, PAGEVIEW, pathsLogic } from 'scenes/paths/pathsLogic'
+import { useWindowSize } from 'lib/hooks/useWindowSize'
 
 function rounded_rect(x, y, w, h, r, tl, tr, bl, br) {
     var retval
@@ -46,7 +47,14 @@ function rounded_rect(x, y, w, h, r, tl, tr, bl, br) {
 function pageUrl(d) {
     const incomingUrls = d.targetLinks
         .map((l) => l?.source?.name?.replace(/(^[0-9]+_)/, ''))
-        .filter((a) => a)
+        .filter((a) => {
+            try {
+                new URL(a)
+            } catch {
+                return false
+            }
+            return a
+        })
         .map((a) => new URL(a))
     const incomingDomains = [...new Set(incomingUrls.map((url) => url.origin))]
 
@@ -76,19 +84,24 @@ function NoData() {
     )
 }
 
-export function Paths() {
+const DEFAULT_PATHS_ID = 'default_paths'
+
+export function Paths({ dashboardItemId = null, filters = null, color = 'white' }) {
     const canvas = useRef(null)
-    const { paths, loadedFilter, loadedPathsLoading: pathsLoading } = useValues(pathsLogic)
+    const size = useWindowSize()
+    const { paths, loadedFilter, resultsLoading: pathsLoading } = useValues(pathsLogic({ dashboardItemId, filters }))
 
     const [modalVisible, setModalVisible] = useState(false)
     const [event, setEvent] = useState(null)
 
     useEffect(() => {
         renderPaths()
-    }, [paths, !pathsLoading])
+    }, [paths, !pathsLoading, size, color])
 
     function renderPaths() {
-        const elements = document.querySelectorAll('.paths svg')
+        const elements = document
+            .getElementById(`'${dashboardItemId || DEFAULT_PATHS_ID}'`)
+            .querySelectorAll(`.paths svg`)
         elements.forEach((node) => node.parentNode.removeChild(node))
 
         if (!paths || paths.nodes.length === 0) {
@@ -100,9 +113,10 @@ export function Paths() {
         let svg = d3
             .select(canvas.current)
             .append('svg')
-            .style('background', '#fff')
+            .style('background', 'var(--item-background)')
             .style('width', width)
             .style('height', height)
+
         let sankey = new Sankey.sankey()
             .nodeId((d) => d.name)
             .nodeAlign(Sankey.sankeyLeft)
@@ -126,15 +140,28 @@ export function Paths() {
             .attr('fill', (d) => {
                 let c
                 for (const link of d.sourceLinks) {
-                    if (c === undefined) c = link.color
-                    else if (c !== link.color) c = null
-                }
-                if (c === undefined)
-                    for (const link of d.targetLinks) {
-                        if (c === undefined) c = link.color
-                        else if (c !== link.color) c = null
+                    if (c === undefined) {
+                        c = link.color
+                    } else if (c !== link.color) {
+                        c = null
                     }
-                return (d3.color(c) || d3.color('#dddddd')).darker(0.5)
+                }
+                if (c === undefined) {
+                    for (const link of d.targetLinks) {
+                        if (c === undefined) {
+                            c = link.color
+                        } else if (c !== link.color) {
+                            c = null
+                        }
+                    }
+                }
+
+                const startNodeColor = d3.color(c)
+                    ? d3.color(c)
+                    : color === 'white'
+                    ? d3.color('#dddddd')
+                    : d3.color('#191919')
+                return startNodeColor.darker(0.5)
             })
             .attr('opacity', 0.5)
             .append('title')
@@ -146,9 +173,15 @@ export function Paths() {
             .attr('id', 'dropoff-gradient')
             .attr('gradientTransform', 'rotate(90)')
 
-        dropOffGradient.append('stop').attr('offset', '0%').attr('stop-color', 'rgba(220,53,69,0.7)')
+        dropOffGradient
+            .append('stop')
+            .attr('offset', '0%')
+            .attr('stop-color', color === 'white' ? 'rgba(220,53,69,0.7)' : 'rgb(220,53,69)')
 
-        dropOffGradient.append('stop').attr('offset', '100%').attr('stop-color', '#ffffff')
+        dropOffGradient
+            .append('stop')
+            .attr('offset', '100%')
+            .attr('stop-color', color === 'white' ? '#fff' : 'var(--item-background)')
 
         const link = svg
             .append('g')
@@ -156,9 +189,8 @@ export function Paths() {
             .selectAll('g')
             .data(links)
             .join('g')
-            .attr('stroke', () => 'var(--blue)')
-            .attr('opacity', 0.3)
-            .style('mix-blend-mode', 'multiply')
+            .attr('stroke', () => (color === 'white' ? 'var(--primary)' : 'var(--item-lighter'))
+            .attr('opacity', 0.4)
 
         link.append('path')
             .attr('d', Sankey.sankeyLinkHorizontal())
@@ -169,12 +201,14 @@ export function Paths() {
         link.append('g')
             .append('path')
             .attr('d', (data) => {
-                if (data.source.layer === 0) return
-                let height =
+                if (data.source.layer === 0) {
+                    return
+                }
+                let _height =
                     data.source.y1 -
                     data.source.y0 -
                     data.source.sourceLinks.reduce((prev, curr) => prev + curr.width, 0)
-                return rounded_rect(0, 0, 30, height, Math.min(25, height), false, true, false, false)
+                return rounded_rect(0, 0, 30, _height, Math.min(25, _height), false, true, false, false)
             })
             .attr('fill', 'url(#dropoff-gradient)')
             .attr('stroke-width', 0)
@@ -217,10 +251,11 @@ export function Paths() {
                 }
             })
             .style('cursor', loadedFilter.path_type === AUTOCAPTURE ? 'pointer' : 'auto')
+            .style('fill', color === 'white' ? '#000' : '#fff')
 
         textSelection
             .append('tspan')
-            .attr('fill-opacity', 0.7)
+            .attr('fill-opacity', 0.8)
             .text((d) => ` ${d.value.toLocaleString()}`)
 
         textSelection.append('title').text((d) => stripHTTP(d.name))
@@ -235,13 +270,13 @@ export function Paths() {
             )}
             <div
                 style={{
-                    minHeight: '70vh',
                     position: 'relative',
                 }}
+                id={`'${dashboardItemId || DEFAULT_PATHS_ID}'`}
             >
                 {pathsLoading && <Loading />}
-                <div ref={canvas} className="paths" style={{ height: '90vh' }} data-attr="paths-viz">
-                    {paths && paths.nodes.length === 0 && <NoData />}
+                <div ref={canvas} className="paths" data-attr="paths-viz">
+                    {!pathsLoading && paths && paths.nodes.length === 0 && !paths.error && <NoData />}
                 </div>
             </div>
             <Modal

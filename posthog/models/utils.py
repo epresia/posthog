@@ -9,7 +9,7 @@ from django.db import models
 
 class UUIDT(uuid.UUID):
     """UUID (mostly) sortable by generation time.
-    
+
     This doesn't adhere to any official UUID version spec, but it is superior as a primary key:
     to incremented integers (as they can reveal sensitive business information about usage volumes and patterns),
     to UUID v4 (as the complete randomness of v4 makes its indexing performance suboptimal),
@@ -58,8 +58,8 @@ class UUIDModel(models.Model):
     id: models.UUIDField = models.UUIDField(primary_key=True, default=UUIDT, editable=False)
 
 
-def sane_repr(*attrs: str) -> Callable[[object], str]:
-    if "id" not in attrs and "pk" not in attrs:
+def sane_repr(*attrs: str, include_id=True) -> Callable[[object], str]:
+    if "id" not in attrs and "pk" not in attrs and include_id:
         attrs = ("id",) + attrs
 
     def _repr(self):
@@ -83,3 +83,10 @@ def generate_random_token(nbytes: int = 32) -> str:
     https://docs.python.org/3/library/secrets.html#how-many-bytes-should-tokens-use
     """
     return secrets.token_urlsafe(nbytes)
+
+
+class Percentile(models.Aggregate):
+    template = "percentile_disc(%(percentile)s) WITHIN GROUP (ORDER BY %(expressions)s)"
+
+    def __init__(self, percentile, expression, **extra):
+        super().__init__(expression, percentile=percentile, **extra)

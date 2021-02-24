@@ -1,7 +1,9 @@
 import datetime
 
+from django.conf import settings
 from django.core.exceptions import EmptyResultSet
 from django.db import connection, models, transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_hooks.signals import raw_hook_event
 from sentry_sdk import capture_exception
@@ -71,22 +73,22 @@ class Action(models.Model):
         with transaction.atomic():
             try:
                 cursor.execute(query, params)
-            except:
-                capture_exception()
+            except Exception as err:
+                capture_exception(err)
 
         self.is_calculating = False
         self.last_calculated_at = calculated_at
         self.save()
 
     def on_perform(self, event):
-        from posthog.api.event import EventViewSet
+        from posthog.api.event import EventSerializer
 
         event.action = self
         raw_hook_event.send(
             sender=None,
             event_name="action_performed",
             instance=self,
-            payload=EventViewSet.serialize_actions(event),
+            payload=EventSerializer(event).data,
             user=event.team,
         )
 
@@ -104,3 +106,18 @@ class Action(models.Model):
 
     def __str__(self):
         return self.name
+
+    def get_analytics_metadata(self):
+        return {
+            "post_to_slack": self.post_to_slack,
+            "name_length": len(self.name),
+            "custom_slack_message_format": self.slack_message_format != "",
+            "event_count_precalc": self.events.count(),  # `precalc` because events are computed async
+            "step_count": self.steps.count(),
+            "match_text_count": self.steps.exclude(Q(text="") | Q(text__isnull=True)).count(),
+            "match_href_count": self.steps.exclude(Q(href="") | Q(href__isnull=True)).count(),
+            "match_selector_count": self.steps.exclude(Q(selector="") | Q(selector__isnull=True)).count(),
+            "match_url_count": self.steps.exclude(Q(url="") | Q(url__isnull=True)).count(),
+            "has_properties": self.steps.exclude(properties=[]).exists(),
+            "deleted": self.deleted,
+        }

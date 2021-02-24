@@ -1,14 +1,17 @@
-import React, { useState, Fragment } from 'react'
-import { uuid, Loading } from 'lib/utils'
+import React, { useState } from 'react'
+import { uuid, Loading, deleteWithUndo } from 'lib/utils'
 import { Link } from 'lib/components/Link'
 import { useValues, useActions } from 'kea'
 import { actionEditLogic } from './actionEditLogic'
-
+import './Actions.scss'
 import { ActionStep } from './ActionStep'
-import { Input } from 'antd'
+import { Button, Col, Input, Row } from 'antd'
+import { InfoCircleOutlined, PlusOutlined, SaveOutlined, DeleteOutlined } from '@ant-design/icons'
+import { router } from 'kea-router'
+import { PageHeader } from 'lib/components/PageHeader'
+import { actionsModel } from '~/models'
 
-// TODO: isEditor === false always
-export function ActionEdit({ actionId, apiURL, onSave, user, isEditor, simmer, showNewActionButton, temporaryToken }) {
+export function ActionEdit({ actionId, apiURL, onSave, user, simmer, temporaryToken }) {
     let logic = actionEditLogic({
         id: actionId,
         apiURL,
@@ -16,103 +19,132 @@ export function ActionEdit({ actionId, apiURL, onSave, user, isEditor, simmer, s
         temporaryToken,
     })
     const { action, actionLoading, errorActionId } = useValues(logic)
-    const { setAction, saveAction, setCreateNew } = useActions(logic)
+    const { setAction, saveAction } = useActions(logic)
+    const { loadActions } = useActions(actionsModel)
 
     const [edited, setEdited] = useState(false)
     const slackEnabled = user?.team?.slack_incoming_webhook
 
-    if (actionLoading || !action) return <Loading />
+    if (actionLoading || !action) {
+        return <Loading />
+    }
+
+    const newAction = () => {
+        setAction({ ...action, steps: [...action.steps, { isNew: uuid() }] })
+    }
 
     const addGroup = (
-        <button
-            type="button"
-            className="btn btn-outline-success btn-sm"
-            onClick={() => {
-                setAction({ ...action, steps: [...action.steps, { isNew: uuid() }] })
-            }}
-        >
+        <Button onClick={newAction} size="small">
             Add another match group
-        </button>
+        </Button>
     )
 
+    const deleteAction = actionId ? (
+        <Button
+            data-attr="delete-action"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => {
+                deleteWithUndo({
+                    endpoint: 'action',
+                    object: action,
+                    callback: () => {
+                        router.actions.push('/events/actions')
+                        loadActions()
+                    },
+                })
+            }}
+        >
+            Delete
+        </Button>
+    ) : undefined
+
     return (
-        <div className={isEditor ? '' : 'card'} style={{ marginTop: isEditor ? 8 : '' }}>
+        <div className="action-edit-container">
+            <PageHeader title={actionId ? 'Editing action' : 'Creating action'} buttons={deleteAction} />
             <form
-                className={isEditor ? '' : 'card-body'}
                 onSubmit={(e) => {
                     e.preventDefault()
-                    if (isEditor && showNewActionButton) setCreateNew(true)
                     saveAction()
                 }}
             >
-                <input
-                    required
-                    className="form-control"
-                    placeholder="For example: user signed up"
-                    value={action.name}
-                    onChange={(e) => {
-                        setAction({ ...action, name: e.target.value })
-                        setEdited(e.target.value ? true : false)
-                    }}
-                    data-attr="edit-action-input"
-                />
+                <div className="input-set">
+                    <label htmlFor="actionName">Action name</label>
+                    <Input
+                        required
+                        placeholder="e.g. user account created, purchase completed, movie watched"
+                        value={action.name}
+                        style={{ maxWidth: 500, display: 'block' }}
+                        onChange={(e) => {
+                            setAction({ ...action, name: e.target.value })
+                            setEdited(e.target.value ? true : false)
+                        }}
+                        data-attr="edit-action-input"
+                        id="actionName"
+                    />
+                    {action.count > -1 && (
+                        <div>
+                            <small className="text-muted">Matches {action.count} events</small>
+                        </div>
+                    )}
+                </div>
 
-                {action.count > -1 && (
+                <div className="match-group-section" style={{ overflow: 'visible' }}>
+                    <h2 className="subtitle">Match groups</h2>
                     <div>
-                        <small className="text-muted">Matches {action.count} events</small>
+                        Your action will be triggered whenever <b>any of your match groups</b> are received.{' '}
+                        <a href="https://posthog.com/docs/features/actions" target="_blank">
+                            <InfoCircleOutlined />
+                        </a>
                     </div>
-                )}
+                    <div style={{ textAlign: 'right', marginBottom: 12 }}>{addGroup}</div>
 
-                {!isEditor && <br />}
-
-                {action.steps.map((step, index) => (
-                    <Fragment key={index}>
-                        {index > 0 ? (
-                            <div
-                                style={{
-                                    textAlign: 'center',
-                                    fontSize: 13,
-                                    letterSpacing: 1,
-                                    opacity: 0.7,
-                                    margin: 8,
+                    <Row gutter={[24, 24]}>
+                        {action.steps.map((step, index) => (
+                            <ActionStep
+                                key={step.id || step.isNew}
+                                identifier={step.id || step.isNew}
+                                index={index}
+                                step={step}
+                                isEditor={false}
+                                actionId={action.id}
+                                simmer={simmer}
+                                isOnlyStep={action.steps.length === 1}
+                                onDelete={() => {
+                                    const identifier = step.id ? 'id' : 'isNew'
+                                    setAction({
+                                        ...action,
+                                        steps: action.steps.filter((s) => s[identifier] !== step[identifier]),
+                                    })
+                                    setEdited(true)
                                 }}
-                            >
-                                OR
+                                onChange={(newStep) => {
+                                    setAction({
+                                        ...action,
+                                        steps: action.steps.map((s) =>
+                                            (step.id && s.id == step.id) || (step.isNew && s.isNew === step.isNew)
+                                                ? {
+                                                      id: step.id,
+                                                      isNew: step.isNew,
+                                                      ...newStep,
+                                                  }
+                                                : s
+                                        ),
+                                    })
+                                    setEdited(true)
+                                }}
+                            />
+                        ))}
+                        <Col span={24} md={12}>
+                            <div className="match-group-add-skeleton" onClick={newAction}>
+                                <PlusOutlined style={{ fontSize: 28, color: '#666666' }} />
                             </div>
-                        ) : null}
-                        <ActionStep
-                            key={step.id || step.isNew}
-                            step={step}
-                            isEditor={isEditor}
-                            actionId={action.id}
-                            simmer={simmer}
-                            isOnlyStep={action.steps.length === 1}
-                            onDelete={() => {
-                                setAction({ ...action, steps: action.steps.filter((s) => s.id != step.id) })
-                                setEdited(true)
-                            }}
-                            onChange={(newStep) => {
-                                setAction({
-                                    ...action,
-                                    steps: action.steps.map((s) =>
-                                        (step.id && s.id == step.id) || (step.isNew && s.isNew === step.isNew)
-                                            ? {
-                                                  id: step.id,
-                                                  isNew: step.isNew,
-                                                  ...newStep,
-                                              }
-                                            : s
-                                    ),
-                                })
-                                setEdited(true)
-                            }}
-                        />
-                    </Fragment>
-                ))}
-
-                {!isEditor ? (
-                    <div>
-                        <div style={{ margin: '1rem 0 0.5rem' }}>
+                        </Col>
+                    </Row>
+                </div>
+                <div>
+                    <div style={{ margin: '1rem 0' }}>
+                        <p>
                             <input
                                 id="webhook-checkbox"
                                 type="checkbox"
@@ -128,61 +160,56 @@ export function ActionEdit({ actionId, apiURL, onSave, user, isEditor, simmer, s
                                 style={{ marginLeft: '0.5rem', marginBottom: '0.5rem' }}
                                 htmlFor="webhook-checkbox"
                             >
-                                Post to Slack/Teams when this action is triggered.
+                                Post to webhook when this action is triggered.
                             </label>{' '}
-                            <Link to="/setup#webhook">
+                            <Link to="/project/settings#webhook">
                                 {slackEnabled ? 'Configure' : 'Enable'} this integration in Setup.
                             </Link>
-                            {action.post_to_slack && (
-                                <>
-                                    <Input
-                                        addonBefore="Message format (optional)"
-                                        placeholder="try: [action.name] triggered by [user.name]"
-                                        value={action.slack_message_format}
-                                        onChange={(e) => {
-                                            setAction({ ...action, slack_message_format: e.target.value })
-                                            setEdited(true)
-                                        }}
-                                        disabled={!slackEnabled || !action.post_to_slack}
-                                        data-attr="edit-slack-message-format"
-                                    />
-                                    <small>
-                                        <a
-                                            href="https://posthog.com/docs/integrations/message-formatting/"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                        >
-                                            See documentation on how to format webhook messages.
-                                        </a>
-                                    </small>
-                                </>
-                            )}
-                        </div>
+                        </p>
+                        {action.post_to_slack && (
+                            <>
+                                <Input
+                                    addonBefore="Message format (optional)"
+                                    placeholder="Default: [action.name] triggered by [user.name]"
+                                    value={action.slack_message_format}
+                                    onChange={(e) => {
+                                        setAction({ ...action, slack_message_format: e.target.value })
+                                        setEdited(true)
+                                    }}
+                                    disabled={!slackEnabled || !action.post_to_slack}
+                                    data-attr="edit-slack-message-format"
+                                />
+                                <small>
+                                    <a
+                                        href="https://posthog.com/docs/integrations/message-formatting/"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                    >
+                                        See documentation on how to format webhook messages.
+                                    </a>
+                                </small>
+                            </>
+                        )}
                     </div>
-                ) : (
-                    <br />
-                )}
-
+                </div>
                 {errorActionId && (
                     <p className="text-danger">
                         Action with this name already exists.{' '}
                         <a href={apiURL + 'action/' + errorActionId}>Click here to edit.</a>
                     </p>
                 )}
-
-                {isEditor ? <div style={{ marginBottom: 20 }}>{addGroup}</div> : null}
-
-                <div className={isEditor ? 'btn-group save-buttons' : ''}>
-                    {!isEditor ? addGroup : null}
-                    <button
+                <div className="float-right">
+                    <span data-attr="delete-action-bottom">{deleteAction}</span>
+                    <Button
                         disabled={!edited}
                         data-attr="save-action-button"
-                        className={
-                            edited ? 'btn-success btn btn-sm float-right' : 'btn-secondary btn btn-sm float-right'
-                        }
+                        type="primary"
+                        icon={<SaveOutlined />}
+                        onClick={saveAction}
+                        style={{ marginLeft: 16 }}
                     >
                         Save action
-                    </button>
+                    </Button>
                 </div>
             </form>
         </div>

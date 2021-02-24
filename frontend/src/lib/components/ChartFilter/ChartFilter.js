@@ -1,32 +1,40 @@
 import React from 'react'
 import { useValues, useActions } from 'kea'
-import { Select, Tooltip } from 'antd'
-import { InfoCircleOutlined } from '@ant-design/icons'
-import { ACTIONS_LINE_GRAPH_LINEAR, ACTIONS_LINE_GRAPH_CUMULATIVE, STICKINESS } from '~/lib/constants'
+import { Select } from 'antd'
+import {
+    ACTIONS_LINE_GRAPH_LINEAR,
+    ACTIONS_LINE_GRAPH_CUMULATIVE,
+    STICKINESS,
+    ACTIONS_PIE_CHART,
+    ACTIONS_BAR_CHART,
+    ACTIONS_TABLE,
+    FUNNEL_VIZ,
+} from '~/lib/constants'
 import { chartFilterLogic } from './chartFilterLogic'
+import { ViewType } from 'scenes/insights/insightLogic'
+
 export function ChartFilter(props) {
-    let { filters, displayMap, onChange } = props
+    let { filters, onChange } = props
 
     const { chartFilter } = useValues(chartFilterLogic)
     const { setChartFilter } = useActions(chartFilterLogic)
-    return [
-        (!filters.display ||
-            filters.display === ACTIONS_LINE_GRAPH_LINEAR ||
-            filters.display === ACTIONS_LINE_GRAPH_CUMULATIVE) && (
-            <Tooltip
-                key="1"
-                getPopupContainer={(trigger) => trigger.parentElement}
-                placement="right"
-                title="Click on a point to see users related to the datapoint"
-            >
-                <InfoCircleOutlined className="info" style={{ color: '#007bff' }}></InfoCircleOutlined>
-            </Tooltip>
-        ),
 
+    const linearDisabled = filters.session && filters.session === 'dist'
+    const cumulativeDisabled = filters.session || filters.shown_as === STICKINESS || filters.retentionType
+    const tableDisabled = false
+    const pieDisabled = filters.session || filters.insight === ViewType.RETENTION
+    const barDisabled = filters.session || filters.retentionType
+    const defaultDisplay = filters.retentionType
+        ? ACTIONS_TABLE
+        : filters.insight === ViewType.FUNNELS
+        ? FUNNEL_VIZ
+        : ACTIONS_LINE_GRAPH_LINEAR
+
+    return (
         <Select
             key="2"
-            defaultValue={displayMap[filters.display || ACTIONS_LINE_GRAPH_LINEAR]}
-            value={displayMap[chartFilter || ACTIONS_LINE_GRAPH_LINEAR]}
+            defaultValue={filters.display || defaultDisplay}
+            value={chartFilter || defaultDisplay}
             onChange={(value) => {
                 setChartFilter(value)
                 onChange(value)
@@ -34,25 +42,34 @@ export function ChartFilter(props) {
             bordered={false}
             dropdownMatchSelectWidth={false}
             data-attr="chart-filter"
+            disabled={props.disabled}
         >
-            <Select.OptGroup label={'Line Chart'}>
-                <Select.Option
-                    value={ACTIONS_LINE_GRAPH_LINEAR}
-                    disabled={filters.session && filters.session === 'dist'}
-                >
-                    Linear
-                </Select.Option>
-                <Select.Option
-                    value={ACTIONS_LINE_GRAPH_CUMULATIVE}
-                    disabled={filters.session || filters.shown_as === STICKINESS}
-                >
-                    Cumulative
-                </Select.Option>
-            </Select.OptGroup>
-            <Select.Option value="ActionsTable">Table</Select.Option>
-            <Select.Option value="ActionsPie" disabled={filters.session}>
-                Pie
-            </Select.Option>
-        </Select>,
-    ]
+            {filters.insight === ViewType.FUNNELS ? (
+                <>
+                    <Select.Option value={FUNNEL_VIZ}>Steps</Select.Option>
+                    <Select.Option value={ACTIONS_LINE_GRAPH_LINEAR}>Trends</Select.Option>
+                </>
+            ) : (
+                <>
+                    <Select.OptGroup label={'Line Chart'}>
+                        <Select.Option value={ACTIONS_LINE_GRAPH_LINEAR} disabled={linearDisabled}>
+                            Linear
+                        </Select.Option>
+                        <Select.Option value={ACTIONS_LINE_GRAPH_CUMULATIVE} disabled={cumulativeDisabled}>
+                            Cumulative
+                        </Select.Option>
+                    </Select.OptGroup>
+                    <Select.Option value={ACTIONS_TABLE} disabled={tableDisabled}>
+                        Table
+                    </Select.Option>
+                    <Select.Option value={ACTIONS_PIE_CHART} disabled={pieDisabled}>
+                        Pie
+                    </Select.Option>
+                    <Select.Option value={ACTIONS_BAR_CHART} disabled={barDisabled}>
+                        Bar
+                    </Select.Option>
+                </>
+            )}
+        </Select>
+    )
 }

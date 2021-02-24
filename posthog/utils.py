@@ -8,22 +8,51 @@ import re
 import subprocess
 import time
 import uuid
-from datetime import date
-from typing import Any, Dict, List, Optional, Tuple, Union
+from itertools import count
+from typing import (
+    Any,
+    Dict,
+    Generator,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 from urllib.parse import urljoin, urlparse
 
-import lzstring  # type: ignore
+import lzstring
 import pytz
-import redis
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from django.conf import settings
+from django.core.cache import cache
+from django.db.models.query import QuerySet
 from django.db.utils import DatabaseError
 from django.http import HttpRequest, HttpResponse
 from django.template.loader import get_template
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 from sentry_sdk import capture_exception, push_scope
+
+from posthog.redis import get_client
+from posthog.settings import print_warning
+
+DATERANGE_MAP = {
+    "minute": datetime.timedelta(minutes=1),
+    "hour": datetime.timedelta(hours=1),
+    "day": datetime.timedelta(days=1),
+    "week": datetime.timedelta(weeks=1),
+    "month": datetime.timedelta(days=31),
+}
+ANONYMOUS_REGEX = r"^([a-z0-9]+\-){4}([a-z0-9]+)$"
+
+
+def format_label_date(date: datetime.datetime, interval: str) -> str:
+    labels_format = "%a. {day} %B"
+    if interval == "hour" or interval == "minute":
+        labels_format += ", %H:%M"
+    return date.strftime(labels_format.format(day=date.day))
 
 
 def absolute_uri(url: Optional[str] = None) -> str:
@@ -105,9 +134,9 @@ def relative_date_parse(input: str) -> datetime.datetime:
 
 def request_to_date_query(filters: Dict[str, Any], exact: Optional[bool]) -> Dict[str, datetime.datetime]:
     if filters.get("date_from"):
-        date_from = relative_date_parse(filters["date_from"])
+        date_from: Optional[datetime.datetime] = relative_date_parse(filters["date_from"])
         if filters["date_from"] == "all":
-            date_from = None  # type: ignore
+            date_from = None
     else:
         date_from = datetime.datetime.today() - relativedelta(days=7)
         date_from = date_from.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -155,30 +184,47 @@ def get_git_commit() -> Optional[str]:
         return None
 
 
-def render_template(template_name: str, request: HttpRequest, context=None) -> HttpResponse:
+def render_template(template_name: str, request: HttpRequest, context: Dict = {}) -> HttpResponse:
     from posthog.models import Team
 
-    if context is None:
-        context = {}
     template = get_template(template_name)
+
+    # Get the current user's team (or first team in the instance) to set opt out capture & self capture configs
+    team: Optional[Team] = None
     try:
-        context["opt_out_capture"] = request.user.team.opt_out_capture
-        context["js_posthog_api_key"] = f"'{request.user.team.api_token}'"
+        team = request.user.team  # type: ignore
     except (Team.DoesNotExist, AttributeError):
-        team = Team.objects.all()
-        # if there's one team on the instance, and they've set opt_out
-        # we'll opt out anonymous users too
-        if team.count() == 1:
-            context["opt_out_capture"] = (team.first().opt_out_capture,)  # type: ignore
+        team = Team.objects.first()
 
-    if os.environ.get("OPT_OUT_CAPTURE"):
-        context["opt_out_capture"] = True
+    context["opt_out_capture"] = os.getenv("OPT_OUT_CAPTURE", False)
 
-    if os.environ.get("SOCIAL_AUTH_GITHUB_KEY") and os.environ.get("SOCIAL_AUTH_GITHUB_SECRET",):
+    # TODO: BEGINS DEPRECATED CODE
+    # Code deprecated in favor of posthog.api.authentication.AuthenticationSerializer
+    # Remove after migrating login to React
+    if settings.SOCIAL_AUTH_GITHUB_KEY and settings.SOCIAL_AUTH_GITHUB_SECRET:
         context["github_auth"] = True
-
-    if os.environ.get("SOCIAL_AUTH_GITLAB_KEY") and os.environ.get("SOCIAL_AUTH_GITLAB_SECRET",):
+    if settings.SOCIAL_AUTH_GITLAB_KEY and settings.SOCIAL_AUTH_GITLAB_SECRET:
         context["gitlab_auth"] = True
+    if getattr(settings, "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY", None) and getattr(
+        settings, "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET", None
+    ):
+        if settings.MULTI_TENANCY:
+            context["google_auth"] = True
+        else:
+            google_login_paid_for = False
+            try:
+                from ee.models.license import License
+            except ImportError:
+                pass
+            else:
+                license = License.objects.first_valid()
+                if license is not None and "google_login" in license.available_features:
+                    google_login_paid_for = True
+            if google_login_paid_for:
+                context["google_auth"] = True
+            else:
+                print_warning(["You have Google login set up, but not the required premium PostHog plan!"])
+    # ENDS DEPRECATED CODE
 
     if os.environ.get("SENTRY_DSN"):
         context["sentry_dsn"] = os.environ["SENTRY_DSN"]
@@ -189,7 +235,9 @@ def render_template(template_name: str, request: HttpRequest, context=None) -> H
         context["git_branch"] = get_git_branch()
 
     if settings.SELF_CAPTURE:
-        context["js_posthog_host"] = "window.location.origin"
+        if team:
+            context["js_posthog_api_key"] = f"'{team.api_token}'"
+            context["js_posthog_host"] = "window.location.origin"
     else:
         context["js_posthog_api_key"] = "'sTMFPsFhdP1Ssg'"
         context["js_posthog_host"] = "'https://app.posthog.com'"
@@ -208,24 +256,22 @@ def friendly_time(seconds: float):
     ).strip()
 
 
-def append_data(dates_filled: List, interval=None, math="sum") -> Dict:
+def append_data(dates_filled: List, interval=None, math="sum") -> Dict[str, Any]:
     append: Dict[str, Any] = {}
     append["data"] = []
     append["labels"] = []
     append["days"] = []
 
-    labels_format = "%a. %-d %B"
     days_format = "%Y-%m-%d"
 
     if interval == "hour" or interval == "minute":
-        labels_format += ", %H:%M"
         days_format += " %H:%M:%S"
 
     for item in dates_filled:
         date = item[0]
         value = item[1]
         append["days"].append(date.strftime(days_format))
-        append["labels"].append(date.strftime(labels_format))
+        append["labels"].append(format_label_date(date, interval))
         append["data"].append(value)
     if math == "sum":
         append["count"] = sum(append["data"])
@@ -281,17 +327,11 @@ def generate_cache_key(stringified: str) -> str:
     return "cache_" + hashlib.md5(stringified.encode("utf-8")).hexdigest()
 
 
-def get_redis_heartbeat() -> Union[str, int]:
+def get_celery_heartbeat() -> Union[str, int]:
+    last_heartbeat = get_client().get("POSTHOG_HEARTBEAT")
+    worker_heartbeat = int(time.time()) - int(last_heartbeat) if last_heartbeat else -1
 
-    if settings.REDIS_URL:
-        redis_instance = redis.from_url(settings.REDIS_URL, db=0)
-    else:
-        return "offline"
-
-    last_heartbeat = redis_instance.get("POSTHOG_HEARTBEAT") if redis_instance else None
-    worker_heartbeat = int(time.time()) - int(last_heartbeat) if last_heartbeat else None
-
-    if worker_heartbeat and (worker_heartbeat == 0 or worker_heartbeat < 300):
+    if 0 <= worker_heartbeat < 300:
         return worker_heartbeat
     return "offline"
 
@@ -314,6 +354,8 @@ def load_data_from_request(request):
                 data_res["body"] = {**json.loads(request.body)}
             except:
                 pass
+        elif request.content_type == "text/plain" or request.content_type == "":
+            data = request.body
         else:
             data = request.POST.get("data")
     else:
@@ -330,7 +372,7 @@ def load_data_from_request(request):
     )
     compression = compression.lower()
 
-    if compression == "gzip":
+    if compression == "gzip" or compression == "gzip-js":
         data = gzip.decompress(data)
 
     if compression == "lz64":
@@ -338,10 +380,14 @@ def load_data_from_request(request):
             data = lzstring.LZString().decompressFromBase64(data.replace(" ", "+"))
         else:
             data = lzstring.LZString().decompressFromBase64(data.decode().replace(" ", "+"))
+        data = data.encode("utf-16", "surrogatepass").decode("utf-16")
 
     #  Is it plain json?
     try:
-        data = json.loads(data)
+        # parse_constant gets called in case of NaN, Infinity etc
+        # default behaviour is to put those into the DB directly
+        # but we just want it to return None
+        data = json.loads(data, parse_constant=lambda x: None)
     except json.JSONDecodeError:
         # if not, it's probably base64 encoded from other libraries
         data = base64_to_json(data)
@@ -402,16 +448,167 @@ def is_postgres_alive() -> bool:
 
 def is_redis_alive() -> bool:
     try:
-        return get_redis_heartbeat() != "offline"
+        get_redis_info()
+        return True
     except BaseException:
         return False
 
 
-def get_redis_info() -> dict:
-    redis_instance = redis.from_url(settings.REDIS_URL, db=0)
-    return redis_instance.info()
+def is_celery_alive() -> bool:
+    try:
+        return get_celery_heartbeat() != "offline"
+    except BaseException:
+        return False
+
+
+def is_plugin_server_alive() -> bool:
+    try:
+        ping = get_client().get("@posthog-plugin-server/ping")
+        return bool(ping and parser.isoparse(ping) > timezone.now() - relativedelta(seconds=30))
+    except BaseException:
+        return False
+
+
+def get_plugin_server_version() -> Optional[str]:
+    cache_key_value = get_client().get("@posthog-plugin-server/version")
+    if cache_key_value:
+        return cache_key_value.decode("utf-8")
+    return None
+
+
+def get_redis_info() -> Mapping[str, Any]:
+    return get_client().info()
 
 
 def get_redis_queue_depth() -> int:
-    redis_instance = redis.from_url(settings.REDIS_URL, db=0)
-    return redis_instance.llen("celery")
+    return get_client().llen("celery")
+
+
+def queryset_to_named_query(qs: QuerySet, prepend: str = "") -> Tuple[str, dict]:
+    raw, params = qs.query.sql_with_params()
+    arg_count = 0
+    counter = count(arg_count)
+    new_string = re.sub(r"%s", lambda _: f"%({prepend}_arg_{str(next(counter))})s", raw)
+    named_params = {}
+    for idx, param in enumerate(params):
+        named_params.update({f"{prepend}_arg_{idx}": param})
+    return new_string, named_params
+
+
+def get_instance_realm() -> str:
+    """
+    Returns the realm for the current instance. `cloud` or `hosted`.
+    """
+    return "cloud" if getattr(settings, "MULTI_TENANCY", False) else "hosted"
+
+
+def get_available_social_auth_providers() -> Dict[str, bool]:
+    github: bool = bool(settings.SOCIAL_AUTH_GITHUB_KEY and settings.SOCIAL_AUTH_GITHUB_SECRET)
+    gitlab: bool = bool(settings.SOCIAL_AUTH_GITLAB_KEY and settings.SOCIAL_AUTH_GITLAB_SECRET)
+    google: bool = False
+
+    if getattr(settings, "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY", None) and getattr(
+        settings, "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET", None,
+    ):
+        if settings.MULTI_TENANCY:
+            google = True
+        else:
+
+            try:
+                from ee.models.license import License
+            except ImportError:
+                pass
+            else:
+                license = License.objects.first_valid()
+                if license is not None and "google_login" in license.available_features:
+                    google = True
+                else:
+                    print_warning(["You have Google login set up, but not the required premium PostHog plan!"])
+
+    return {"google-oauth2": google, "github": github, "gitlab": gitlab}
+
+
+def flatten(l: Union[List, Tuple]) -> Generator:
+    for el in l:
+        if isinstance(el, list):
+            yield from flatten(el)
+        else:
+            yield el
+
+
+def get_daterange(
+    start_date: Optional[datetime.datetime], end_date: Optional[datetime.datetime], frequency: str
+) -> List[Any]:
+    """
+    Returns list of a fixed frequency Datetime objects between given bounds.
+
+    Parameters:
+        start_date: Left bound for generating dates.
+        end_date: Right bound for generating dates.
+        frequency: Possible options => minute, hour, day, week, month
+    """
+
+    delta = DATERANGE_MAP[frequency]
+
+    if not start_date or not end_date:
+        return []
+
+    time_range = []
+    if frequency != "minute" and frequency != "hour":
+        start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    if frequency == "week":
+        start_date += datetime.timedelta(days=6 - start_date.weekday())
+    if frequency != "month":
+        while start_date <= end_date:
+            time_range.append(start_date)
+            start_date += delta
+    else:
+        if start_date.day != 1:
+            start_date = (start_date.replace(day=1) + delta).replace(day=1)
+        while start_date <= end_date:
+            time_range.append(start_date)
+            start_date = (start_date.replace(day=1) + delta).replace(day=1)
+    return time_range
+
+
+def get_safe_cache(cache_key: str):
+    try:
+        cached_result = cache.get(cache_key)  # cache.get is safe in most cases
+        return cached_result
+    except:  # if it errors out, the cache is probably corrupted
+        try:
+            cache.delete(cache_key)  # in that case, try to delete the cache
+        except:
+            pass
+    return None
+
+
+def is_anonymous_id(distinct_id: str) -> bool:
+    # Our anonymous ids are _not_ uuids, but a random collection of strings
+    return bool(re.match(ANONYMOUS_REGEX, distinct_id))
+
+
+def mask_email_address(email_address: str) -> str:
+    """
+    Grabs an email address and returns it masked in a human-friendly way to protect PII.
+        Example: testemail@posthog.com -> t********l@posthog.com
+    """
+    index = email_address.find("@")
+
+    if index == -1:
+        raise ValueError("Please provide a valid email address.")
+
+    if index == 1:
+        # Username is one letter, mask it differently
+        return f"*{email_address[index:]}"
+
+    return f"{email_address[0]}{'*' * (index - 2)}{email_address[index-1:]}"
+
+
+def is_valid_regex(value: Any) -> bool:
+    try:
+        re.compile(value)
+        return True
+    except re.error:
+        return False

@@ -1,13 +1,16 @@
-import React, { useRef, useState } from 'react'
+import React, { useRef } from 'react'
 import { useActions, useValues } from 'kea'
-import { EntityTypes } from '../trendsLogic'
-import { CloseButton } from '~/lib/utils'
-import { Dropdown } from '~/lib/components/Dropdown'
+import { Button, Tooltip, Col, Row, Select } from 'antd'
+import { EntityTypes } from '../../trends/trendsLogic'
 import { ActionFilterDropdown } from './ActionFilterDropdown'
-import { Tooltip } from 'antd'
 import { PropertyFilters } from 'lib/components/PropertyFilters/PropertyFilters'
 import { userLogic } from 'scenes/userLogic'
-import { DownOutlined } from '@ant-design/icons'
+import { DownOutlined, DeleteOutlined } from '@ant-design/icons'
+import { SelectGradientOverflow } from 'lib/components/SelectGradientOverflow'
+import './ActionFilterRow.scss'
+
+const PROPERTY_MATH_TYPE = 'property'
+const EVENT_MATH_TYPE = 'event'
 
 const MATHS = {
     total: {
@@ -20,6 +23,7 @@ const MATHS = {
             </>
         ),
         onProperty: false,
+        type: EVENT_MATH_TYPE,
     },
     dau: {
         name: 'Active users',
@@ -31,6 +35,7 @@ const MATHS = {
             </>
         ),
         onProperty: false,
+        type: EVENT_MATH_TYPE,
     },
     sum: {
         name: 'Sum',
@@ -42,6 +47,7 @@ const MATHS = {
             </>
         ),
         onProperty: true,
+        type: PROPERTY_MATH_TYPE,
     },
     avg: {
         name: 'Average',
@@ -53,6 +59,7 @@ const MATHS = {
             </>
         ),
         onProperty: true,
+        type: PROPERTY_MATH_TYPE,
     },
     min: {
         name: 'Minimum',
@@ -64,6 +71,7 @@ const MATHS = {
             </>
         ),
         onProperty: true,
+        type: PROPERTY_MATH_TYPE,
     },
     max: {
         name: 'Maximum',
@@ -75,12 +83,65 @@ const MATHS = {
             </>
         ),
         onProperty: true,
+        type: PROPERTY_MATH_TYPE,
+    },
+    median: {
+        name: 'Median',
+        description: (
+            <>
+                Event property median (50th percentile).
+                <br />
+                For example 100 events captured with property <code>amount</code> equal to 101..200, result in 150.
+            </>
+        ),
+        onProperty: true,
+        type: PROPERTY_MATH_TYPE,
+    },
+    p90: {
+        name: '90th percentile',
+        description: (
+            <>
+                Event property 90th percentile.
+                <br />
+                For example 100 events captured with property <code>amount</code> equal to 101..200, result in 190.
+            </>
+        ),
+        onProperty: true,
+        type: 'property',
+    },
+    p95: {
+        name: '95th percentile',
+        description: (
+            <>
+                Event property 95th percentile.
+                <br />
+                For example 100 events captured with property <code>amount</code> equal to 101..200, result in 195.
+            </>
+        ),
+        onProperty: true,
+        type: PROPERTY_MATH_TYPE,
+    },
+    p99: {
+        name: '99th percentile',
+        description: (
+            <>
+                Event property 90th percentile.
+                <br />
+                For example 100 events captured with property <code>amount</code> equal to 101..200, result in 199.
+            </>
+        ),
+        onProperty: true,
+        type: PROPERTY_MATH_TYPE,
     },
 }
-const MATH_ENTRIES = Object.entries(MATHS)
+
+const EVENT_MATH_ENTRIES = Object.entries(MATHS).filter(([, item]) => item.type == EVENT_MATH_TYPE)
+const PROPERTY_MATH_ENTRIES = Object.entries(MATHS).filter(([, item]) => item.type == PROPERTY_MATH_TYPE)
 
 const determineFilterLabel = (visible, filter) => {
-    if (visible) return 'Hide filters'
+    if (visible) {
+        return 'Hide filters'
+    }
     if (filter.properties && Object.keys(filter.properties).length > 0) {
         return `${Object.keys(filter.properties).length} filter${
             Object.keys(filter.properties).length === 1 ? '' : 's'
@@ -89,12 +150,19 @@ const determineFilterLabel = (visible, filter) => {
     return 'Add filters'
 }
 
-export function ActionFilterRow({ logic, filter, index, hideMathSelector }) {
+export function ActionFilterRow({ logic, filter, index, hideMathSelector, singleFilter }) {
     const node = useRef()
-    const { selectedFilter, entities } = useValues(logic)
-    const { selectFilter, updateFilterMath, removeLocalFilter, updateFilterProperty } = useActions(logic)
+    const { selectedFilter, entities, entityFilterVisible } = useValues(logic)
+    const {
+        selectFilter,
+        updateFilterMath,
+        removeLocalFilter,
+        updateFilterProperty,
+        setEntityFilterVisibility,
+    } = useActions(logic)
     const { eventProperties, eventPropertiesNumerical } = useValues(userLogic)
-    const [entityFilterVisible, setEntityFilterVisible] = useState(false)
+
+    const visible = entityFilterVisible[filter.order]
 
     let entity, name, value
     let math = filter.math
@@ -127,8 +195,11 @@ export function ActionFilterRow({ logic, filter, index, hideMathSelector }) {
         selectedFilter && selectedFilter.type === filter.type && selectedFilter.index === index
 
     const onClick = () => {
-        if (selectedFilter && selectedFilter.type === filter.type && selectedFilter.index === index) selectFilter(null)
-        else selectFilter({ filter, type: filter.type, index })
+        if (selectedFilter && selectedFilter.type === filter.type && selectedFilter.index === index) {
+            selectFilter(null)
+        } else {
+            selectFilter({ filter, type: filter.type, index })
+        }
     }
 
     if (filter.type === EntityTypes.NEW_ENTITY) {
@@ -140,30 +211,55 @@ export function ActionFilterRow({ logic, filter, index, hideMathSelector }) {
         value = entity.id || filter.id
     }
     return (
-        <div className="mt-2" style={{ paddingBottom: 16 }}>
-            <button
-                data-attr={'trend-element-subject-' + index}
-                ref={node}
-                className="filter-action btn btn-sm btn-light"
-                type="button"
-                onClick={onClick}
-                style={{
-                    fontWeight: 500,
-                }}
-            >
-                {name || 'Select action'}
-                <DownOutlined style={{ marginLeft: '3px', color: 'rgba(0, 0, 0, 0.25)' }} />
-            </button>
-            {!hideMathSelector && (
-                <MathSelector
-                    math={math}
-                    index={index}
-                    onMathSelect={onMathSelect}
-                    areEventPropertiesNumericalAvailable={
-                        eventPropertiesNumerical && eventPropertiesNumerical.length > 0
-                    }
-                />
-            )}
+        <div>
+            <Row gutter={8} className="mt">
+                <Col style={{ maxWidth: `calc(${hideMathSelector ? '100' : '50'}% - 16px)` }}>
+                    <Button
+                        data-attr={'trend-element-subject-' + index}
+                        ref={node}
+                        onClick={onClick}
+                        style={{ maxWidth: '100%', display: 'flex', alignItems: 'center' }}
+                    >
+                        <span className="text-overflow" style={{ maxWidth: '100%' }}>
+                            {name || 'Select action'}
+                        </span>
+                        <DownOutlined style={{ fontSize: 10 }} />
+                    </Button>
+                    <ActionFilterDropdown
+                        open={dropDownCondition()}
+                        logic={logic}
+                        openButtonRef={node}
+                        onClose={() => selectFilter(null)}
+                    />
+                </Col>
+                <Col style={{ maxWidth: 'calc(50% - 16px)' }}>
+                    {!hideMathSelector && (
+                        <MathSelector
+                            math={math}
+                            index={index}
+                            onMathSelect={onMathSelect}
+                            areEventPropertiesNumericalAvailable={
+                                eventPropertiesNumerical && eventPropertiesNumerical.length > 0
+                            }
+                            style={{ maxWidth: '100%', width: 'initial' }}
+                        />
+                    )}
+                </Col>
+                {!singleFilter && (
+                    <Col>
+                        <Button
+                            type="link"
+                            onClick={onClose}
+                            style={{
+                                padding: 0,
+                                paddingLeft: 8,
+                            }}
+                        >
+                            <DeleteOutlined />
+                        </Button>
+                    </Col>
+                )}
+            </Row>
             {!hideMathSelector && MATHS[math]?.onProperty && (
                 <MathPropertySelector
                     name={name}
@@ -175,27 +271,18 @@ export function ActionFilterRow({ logic, filter, index, hideMathSelector }) {
                 />
             )}
             <div style={{ paddingTop: 6 }}>
-                <span style={{ color: '#C4C4C4', fontSize: 18, paddingLeft: 6 }}>&#8627;</span>
-                <div
-                    className="btn btn-sm btn-light ml-2"
-                    onClick={() => setEntityFilterVisible(!entityFilterVisible)}
+                <span style={{ color: '#C4C4C4', fontSize: 18, paddingLeft: 6, paddingRight: 2 }}>&#8627;</span>
+                <Button
+                    className="ant-btn-md"
+                    onClick={() => setEntityFilterVisibility(filter.order, !visible)}
                     data-attr={'show-prop-filter-' + index}
                 >
-                    {determineFilterLabel(entityFilterVisible, filter)}
-                </div>
-                <CloseButton
-                    className="ml-2"
-                    onClick={onClose}
-                    style={{
-                        float: 'none',
-                        position: 'absolute',
-                        marginTop: 3,
-                    }}
-                />
+                    {determineFilterLabel(visible, filter)}
+                </Button>
             </div>
 
-            {entityFilterVisible && (
-                <div className="ml-3">
+            {visible && (
+                <div className="ml">
                     <PropertyFilters
                         pageKey={`${index}-${value}-filter`}
                         properties={eventProperties}
@@ -205,107 +292,123 @@ export function ActionFilterRow({ logic, filter, index, hideMathSelector }) {
                     />
                 </div>
             )}
-            {dropDownCondition() && (
-                <ActionFilterDropdown
-                    logic={logic}
-                    onClickOutside={(e) => {
-                        if (node.current.contains(e.target)) {
-                            return
-                        }
-                        selectFilter(null)
-                    }}
-                />
-            )}
         </div>
     )
 }
 
-function MathSelector({ math, index, onMathSelect, areEventPropertiesNumericalAvailable }) {
-    const numericalNotice = `This can only be used on on properties that have at least one number type occurence in your events.${
+function MathSelector({ math, index, onMathSelect, areEventPropertiesNumericalAvailable, style }) {
+    const numericalNotice = `This can only be used on properties that have at least one number type occurence in your events.${
         areEventPropertiesNumericalAvailable ? '' : ' None have been found yet!'
     }`
 
     return (
-        <Dropdown
-            title={MATHS[math || 'total']?.name}
-            buttonClassName="btn btn-sm btn-light ml-2"
+        <Select
+            style={{ width: 150, ...style }}
+            value={math || 'total'}
+            onChange={(value) => onMathSelect(index, value)}
             data-attr={`math-selector-${index}`}
         >
-            {MATH_ENTRIES.map(([key, { name, description, onProperty }]) => {
-                const disabled = onProperty && !areEventPropertiesNumericalAvailable
-                return (
-                    <Tooltip
-                        placement="right"
-                        title={
-                            onProperty ? (
-                                <>
-                                    {description}
-                                    <br />
-                                    {numericalNotice}
-                                </>
-                            ) : (
-                                description
-                            )
-                        }
-                        key={`math-${key}`}
-                    >
-                        <div>
-                            <button
-                                className="dropdown-item"
-                                disabled={disabled}
-                                onClick={
-                                    disabled
-                                        ? undefined
-                                        : () => {
-                                              onMathSelect(index, key)
-                                          }
+            <Select.OptGroup key="event aggregates" label="Event aggregation">
+                {EVENT_MATH_ENTRIES.map(([key, { name, description, onProperty }]) => {
+                    const disabled = onProperty && !areEventPropertiesNumericalAvailable
+                    return (
+                        <Select.Option key={key} value={key} data-attr={`math-${key}-${index}`} disabled={disabled}>
+                            <Tooltip
+                                title={
+                                    onProperty ? (
+                                        <>
+                                            {description}
+                                            <br />
+                                            {numericalNotice}
+                                        </>
+                                    ) : (
+                                        description
+                                    )
                                 }
-                                data-attr={`math-${key}-${index}`}
+                                placement="right"
                             >
-                                {name}
-                            </button>
-                        </div>
-                    </Tooltip>
-                )
-            })}
-        </Dropdown>
+                                <div
+                                    style={{
+                                        height: '100%',
+                                        width: '100%',
+                                        paddingRight: 8,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                    }}
+                                >
+                                    {name}
+                                </div>
+                            </Tooltip>
+                        </Select.Option>
+                    )
+                })}
+            </Select.OptGroup>
+            <Select.OptGroup key="property aggregates" label="Property aggregation">
+                {PROPERTY_MATH_ENTRIES.map(([key, { name, description, onProperty }]) => {
+                    const disabled = onProperty && !areEventPropertiesNumericalAvailable
+                    return (
+                        <Select.Option key={key} value={key} data-attr={`math-${key}-${index}`} disabled={disabled}>
+                            <Tooltip
+                                title={
+                                    onProperty ? (
+                                        <>
+                                            {description}
+                                            <br />
+                                            {numericalNotice}
+                                        </>
+                                    ) : (
+                                        description
+                                    )
+                                }
+                                placement="right"
+                            >
+                                <div style={{ height: '100%', width: '100%' }}>{name}</div>
+                            </Tooltip>
+                        </Select.Option>
+                    )
+                })}
+            </Select.OptGroup>
+        </Select>
     )
 }
 
 function MathPropertySelector(props) {
-    const applicableProperties = props.properties.filter(
-        ({ value }) => value[0] !== '$' && value !== 'distinct_id' && value !== 'token'
-    )
+    const applicableProperties = props.properties
+        .filter(({ value }) => value[0] !== '$' && value !== 'distinct_id' && value !== 'token')
+        .sort((a, b) => (a.value + '').localeCompare(b.value))
 
     return (
-        <Dropdown
-            title={props.mathProperty || 'Select property'}
-            titleEmpty="No applicable properties"
-            buttonClassName="btn btn-sm btn-light ml-2"
-            data-attr={`math-property-selector-${props.index}`}
+        <SelectGradientOverflow
+            showSearch
+            style={{ width: 150 }}
+            onChange={(_, payload) => props.onMathPropertySelect(props.index, payload && payload.value)}
+            className="property-select"
+            value={props.mathProperty}
+            data-attr="math-property-select"
+            dropdownMatchSelectWidth={350}
+            placeholder={'Select property'}
         >
             {applicableProperties.map(({ value, label }) => (
-                <Tooltip
-                    placement="right"
-                    title={
-                        <>
-                            Calculate {MATHS[props.math].name.toLowerCase()} from property <code>{label}</code>. Note
-                            that only {props.name} occurences where <code>{label}</code> is set and a number will be
-                            taken into account.
-                        </>
-                    }
+                <Select.Option
                     key={`math-property-${value}-${props.index}`}
+                    value={value}
+                    data-attr={`math-property-${value}-${props.index}`}
                 >
-                    <a
-                        href="#"
-                        className="dropdown-item"
-                        onClick={() => props.onMathPropertySelect(props.index, value)}
-                        data-attr={`math-property-${value}-${props.index}`}
+                    <Tooltip
+                        title={
+                            <>
+                                Calculate {MATHS[props.math].name.toLowerCase()} from property <code>{label}</code>.
+                                Note that only {props.name} occurences where <code>{label}</code> is set and a number
+                                will be taken into account.
+                            </>
+                        }
+                        placement="right"
+                        overlayStyle={{ zIndex: 9999999999 }}
                     >
                         {label}
-                    </a>
-                </Tooltip>
+                    </Tooltip>
+                </Select.Option>
             ))}
-        </Dropdown>
+        </SelectGradientOverflow>
     )
 }

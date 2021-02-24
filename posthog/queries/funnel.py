@@ -1,17 +1,20 @@
 import re
+import uuid
 from collections import defaultdict
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
+import pytz
 from django.db import connection
 from django.db.models import IntegerField, Min, Value
 from django.utils import timezone
-from psycopg2 import sql  # type: ignore
+from psycopg2 import sql
 
-from posthog.constants import TREND_FILTER_TYPE_ACTIONS, TREND_FILTER_TYPE_EVENTS
+from posthog.constants import TREND_FILTER_TYPE_ACTIONS, TREND_FILTER_TYPE_EVENTS, TRENDS_LINEAR
 from posthog.models import Action, Entity, Event, Filter, Person, Team
 from posthog.models.utils import namedtuplefetchall
-from posthog.queries.base import BaseQuery
+from posthog.queries.base import BaseQuery, properties_to_Q
+from posthog.utils import append_data, format_label_date, get_daterange
 
 
 class Funnel(BaseQuery):
@@ -23,7 +26,7 @@ class Funnel(BaseQuery):
         self._filter = filter
         self._team = team
 
-    def _gen_lateral_bodies(self):
+    def _gen_lateral_bodies(self, within_time: Optional[str] = None):
         annotations = {}
         for index, step in enumerate(self._filter.entities):
             filter_key = "event" if step.type == TREND_FILTER_TYPE_EVENTS else "action__pk"
@@ -45,8 +48,8 @@ class Funnel(BaseQuery):
                         else {}
                     ),
                 )
-                .filter(self._filter.properties_to_Q(team_id=self._team.pk))
-                .filter(step.properties_to_Q(team_id=self._team.pk))
+                .filter(properties_to_Q(self._filter.properties, team_id=self._team.pk))
+                .filter(properties_to_Q(step.properties, team_id=self._team.pk))
             )
             with connection.cursor() as cursor:
                 event_string = cursor.mogrify(*event.query.sql_with_params())
@@ -56,7 +59,15 @@ class Funnel(BaseQuery):
             event_string = (
                 event_string.decode("utf-8")
                 .replace("'1234321'", "{prev_step_person_id}")
-                .replace("'2000-01-01T00:00:00+00:00'::timestamptz", "{prev_step_ts}")
+                .replace(
+                    "'2000-01-01T00:00:00+00:00'::timestamptz",
+                    "{prev_step_ts} %s"
+                    % (
+                        ' AND "posthog_event"."timestamp" < "step_{}"."step_ts" + {}'.format(index - 1, within_time)
+                        if within_time
+                        else ""
+                    ),
+                )
                 .replace('"posthog_event"."distinct_id"', '"pdi"."person_id"')
                 .replace("99999999", '"pdi"."person_id"')
                 .replace(', "pdi"."person_id" AS "person_id"', "")
@@ -73,7 +84,7 @@ class Funnel(BaseQuery):
             annotations["step_{}".format(index)] = query
         return annotations
 
-    def _serialize_step(self, step: Entity, people: Optional[List[int]] = None) -> Dict[str, Any]:
+    def _serialize_step(self, step: Entity, count: int, people: Optional[List[uuid.UUID]] = None) -> Dict[str, Any]:
         if step.type == TREND_FILTER_TYPE_ACTIONS:
             name = Action.objects.get(team=self._team.pk, pk=step.id).name
         else:
@@ -83,7 +94,7 @@ class Funnel(BaseQuery):
             "name": name,
             "order": step.order,
             "people": people if people else [],
-            "count": len(people) if people else 0,
+            "count": count,
             "type": step.type,
         }
 
@@ -99,7 +110,7 @@ class Funnel(BaseQuery):
             """({query}) {step} {on_true} {join}""" if len(query_bodies) > 1 else """({query}) {step} {on_true} """
         )
         PERSON_FIELDS = [
-            [sql.Identifier("posthog_person"), sql.Identifier("id")],
+            [sql.Identifier("posthog_person"), sql.Identifier("uuid")],
             [sql.Identifier("posthog_person"), sql.Identifier("created_at")],
             [sql.Identifier("posthog_person"), sql.Identifier("team_id")],
             [sql.Identifier("posthog_person"), sql.Identifier("properties")],
@@ -157,6 +168,69 @@ class Funnel(BaseQuery):
         query = query + sql.SQL(" ").join(lateral_joins) + query_footer
         return query
 
+    def _build_trends_query(self, filter: Filter) -> sql.SQL:
+        # TODO: Only select from_step and to_step in _build_steps_query
+        particular_steps = (
+            sql.SQL(f'COUNT("step_{index}") as "step_{index}_count"') for index in range(len(filter.entities))
+        )
+        trends_query = sql.SQL(
+            """
+            SELECT
+                date_trunc({interval}, {interval_field}) as "date",
+                {particular_steps}
+            FROM (
+                {steps_query}
+            ) steps_at_dates GROUP BY "date"
+        """
+        ).format(
+            interval=sql.Literal(filter.interval),
+            particular_steps=sql.SQL(",\n").join(particular_steps),
+            steps_query=self._build_query(self._gen_lateral_bodies(within_time="'1 day'")),
+            interval_field=sql.SQL("step_0")
+            if filter.interval != "week"
+            else sql.SQL("(\"step_0\" + interval '1 day') AT TIME ZONE 'UTC'"),
+        )
+        return trends_query
+
+    def _get_last_step_attr(self, step: object) -> int:
+        if len(self._filter.entities) == 1:
+            return 0
+        return getattr(step, "step_{}_count".format(len(self._filter.entities) - 1))
+
+    def _get_trends(self) -> List[Dict[str, Any]]:
+        serialized: Dict[str, Any] = {"count": 0, "data": [], "days": [], "labels": []}
+        with connection.cursor() as cursor:
+            qstring = self._build_trends_query(self._filter).as_string(cursor.connection)
+            cursor.execute(qstring)
+            steps_at_dates = namedtuplefetchall(cursor)
+
+        date_range = get_daterange(
+            self._filter.date_from or steps_at_dates[0].date, self._filter.date_to, frequency=self._filter.interval
+        )
+
+        data_array = [
+            {"date": step.date, "count": round(self._get_last_step_attr(step) / step.step_0_count * 100)}
+            for step in steps_at_dates
+        ]
+
+        if self._filter.interval == "week":
+            for df in data_array:
+                df["date"] -= timedelta(days=df["date"].weekday() + 1)
+        elif self._filter.interval == "month":
+            for df in data_array:
+                df["date"] = df["date"].replace(day=1)
+        for df in data_array:
+            df["date"] = df["date"].replace(tzinfo=pytz.utc).isoformat()
+
+        datewise_data = {d["date"]: d["count"] for d in data_array}
+        values = [(key, datewise_data.get(key.isoformat(), 0)) for key in date_range]
+
+        for item in values:
+            serialized["days"].append(item[0])
+            serialized["data"].append(item[1])
+            serialized["labels"].append(format_label_date(item[0], self._filter.interval))
+        return [serialized]
+
     def data_to_return(self, results: List[Person]) -> List[Dict[str, Any]]:
         steps = []
 
@@ -180,9 +254,11 @@ class Funnel(BaseQuery):
                     average_time[index]["total_people"] += 1
 
                 if getattr(person, "step_{}".format(index)):
-                    person_score[person.id] += 1
-                    relevant_people.append(person.id)
-            steps.append(self._serialize_step(funnel_step, relevant_people))
+                    person_score[person.uuid] += 1
+                    relevant_people.append(person.uuid)
+            steps.append(
+                self._serialize_step(funnel_step, len(relevant_people) if relevant_people else 0, relevant_people)
+            )
 
         if len(steps) > 0:
             for index, _ in enumerate(steps):
@@ -200,6 +276,12 @@ class Funnel(BaseQuery):
         return steps
 
     def run(self, *args, **kwargs) -> List[Dict[str, Any]]:
+        if len(self._filter.entities) == 0:
+            return []
+
+        if self._filter.display == TRENDS_LINEAR:
+            return self._get_trends()
+
         with connection.cursor() as cursor:
             qstring = self._build_query(self._gen_lateral_bodies()).as_string(cursor.connection)
             cursor.execute(qstring)

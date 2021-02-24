@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Dict, List
 
 from rest_framework.decorators import action
 from rest_framework.request import Request
@@ -7,93 +7,70 @@ from rest_framework.response import Response
 from ee.clickhouse.queries.clickhouse_funnel import ClickhouseFunnel
 from ee.clickhouse.queries.clickhouse_paths import ClickhousePaths
 from ee.clickhouse.queries.clickhouse_retention import ClickhouseRetention
-from ee.clickhouse.queries.clickhouse_sessions import SESSIONS_LIST_DEFAULT_LIMIT, ClickhouseSessions
 from ee.clickhouse.queries.clickhouse_stickiness import ClickhouseStickiness
-from ee.clickhouse.queries.clickhouse_trends import ClickhouseTrends
-from ee.clickhouse.util import (
-    CH_FUNNEL_ENDPOINT,
-    CH_PATH_ENDPOINT,
-    CH_RETENTION_ENDPOINT,
-    CH_SESSION_ENDPOINT,
-    CH_TREND_ENDPOINT,
-    endpoint_enabled,
-)
+from ee.clickhouse.queries.sessions.clickhouse_sessions import ClickhouseSessions
+from ee.clickhouse.queries.trends.clickhouse_trends import ClickhouseTrends
+from ee.clickhouse.queries.util import get_earliest_timestamp
 from posthog.api.insight import InsightViewSet
-from posthog.constants import TRENDS_STICKINESS
-from posthog.models.filter import Filter
+from posthog.constants import INSIGHT_FUNNELS, INSIGHT_PATHS, INSIGHT_SESSIONS, TRENDS_STICKINESS
+from posthog.decorators import cached_function
+from posthog.models import Event
+from posthog.models.filters import Filter
+from posthog.models.filters.path_filter import PathFilter
+from posthog.models.filters.retention_filter import RetentionFilter
+from posthog.models.filters.sessions_filter import SessionsFilter
+from posthog.models.filters.stickiness_filter import StickinessFilter
 
 
-class ClickhouseInsights(InsightViewSet):
-    @action(methods=["GET"], detail=False)
-    def trend(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        if not endpoint_enabled(CH_TREND_ENDPOINT, request.user.distinct_id):
-            result = super().calculate_trends(request)
-            return Response(result)
-
-        team = request.user.team_set.get()
+class ClickhouseInsightsViewSet(InsightViewSet):
+    @cached_function()
+    def calculate_trends(self, request: Request) -> Dict[str, Any]:
+        team = self.team
         filter = Filter(request=request)
 
         if filter.shown_as == TRENDS_STICKINESS:
-            result = ClickhouseStickiness().run(filter, team)
+            stickiness_filter = StickinessFilter(
+                request=request, team=team, get_earliest_timestamp=get_earliest_timestamp
+            )
+            result = ClickhouseStickiness().run(stickiness_filter, team)
         else:
             result = ClickhouseTrends().run(filter, team)
 
         self._refresh_dashboard(request=request)
+        return {"result": result}
 
-        return Response(result)
+    @cached_function()
+    def calculate_session(self, request: Request) -> Dict[str, Any]:
+        return {
+            "result": ClickhouseSessions().run(
+                team=self.team, filter=SessionsFilter(request=request, data={"insight": INSIGHT_SESSIONS})
+            )
+        }
 
-    @action(methods=["GET"], detail=False)
-    def session(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        if not endpoint_enabled(CH_SESSION_ENDPOINT, request.user.distinct_id):
-            result = super().calculate_session(request)
-            return Response(result)
-
-        team = request.user.team_set.get()
-        filter = Filter(request=request)
-
-        limit = int(request.GET.get("limit", SESSIONS_LIST_DEFAULT_LIMIT))
-        offset = int(request.GET.get("offset", 0))
-
-        response = ClickhouseSessions().run(team=team, filter=filter, limit=limit + 1, offset=offset)
-
-        if len(response) > limit:
-            response.pop()
-            return Response({"result": response, "offset": offset + limit})
-        else:
-            return Response({"result": response,})
-
-    @action(methods=["GET"], detail=False)
-    def path(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-
-        if not endpoint_enabled(CH_PATH_ENDPOINT, request.user.distinct_id):
-            result = super().calculate_path(request)
-            return Response(result)
-
-        team = request.user.team_set.get()
-        filter = Filter(request=request)
+    @cached_function()
+    def calculate_path(self, request: Request) -> Dict[str, Any]:
+        team = self.team
+        filter = PathFilter(request=request, data={"insight": INSIGHT_PATHS})
         resp = ClickhousePaths().run(filter=filter, team=team)
-        return Response(resp)
+        return {"result": resp}
 
     @action(methods=["GET"], detail=False)
     def funnel(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-
-        if not endpoint_enabled(CH_FUNNEL_ENDPOINT, request.user.distinct_id):
-            result = super().calculate_funnel(request)
-            return Response(result)
-
-        team = request.user.team_set.get()
-        filter = Filter(request=request)
-        response = ClickhouseFunnel(team=team, filter=filter).run()
+        response = self.calculate_funnel(request)
         return Response(response)
 
-    @action(methods=["GET"], detail=False)
-    def retention(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+    @cached_function()
+    def calculate_funnel(self, request: Request) -> Dict[str, Any]:
+        team = self.team
+        filter = Filter(request=request, data={"insight": INSIGHT_FUNNELS})
+        return {"result": ClickhouseFunnel(team=team, filter=filter).run()}
 
-        if not endpoint_enabled(CH_RETENTION_ENDPOINT, request.user.distinct_id):
-            result = super().calculate_retention(request)
-            return Response({"data": result})
-
-        team = request.user.team_set.get()
-        filter = Filter(request=request)
+    @cached_function()
+    def calculate_retention(self, request: Request) -> Dict[str, Any]:
+        team = self.team
+        data = {}
+        if not request.GET.get("date_from"):
+            data.update({"date_from": "-11d"})
+        filter = RetentionFilter(data=data, request=request)
         result = ClickhouseRetention().run(filter, team)
-        return Response({"data": result})
+        return {"result": result}

@@ -1,64 +1,52 @@
-import copy
-import datetime
 import json
-from datetime import timedelta
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
-import numpy as np
-import pandas as pd
-from celery.result import AsyncResult
-from dateutil.relativedelta import relativedelta
+import posthoganalytics
 from django.core.cache import cache
-from django.db import connection
-from django.db.models import (
-    Avg,
-    BooleanField,
-    Count,
-    Exists,
-    FloatField,
-    Max,
-    Min,
-    OuterRef,
-    Prefetch,
-    Q,
-    QuerySet,
-    Sum,
-    Value,
-    functions,
-)
-from django.db.models.expressions import RawSQL, Subquery
-from django.db.models.functions import Cast
-from django.db.models.signals import post_delete, post_save
+from django.db.models import Count, Exists, OuterRef, Prefetch, QuerySet
+from django.db.models.signals import post_save
+from django.db.models.sql.query import Query
 from django.dispatch import receiver
 from django.utils.timezone import now
 from rest_framework import authentication, request, serializers, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_hooks.signals import raw_hook_event
 
+from posthog.api.routing import StructuredViewSetMixin
 from posthog.api.user import UserSerializer
+from posthog.api.utils import get_target_entity
 from posthog.auth import PersonalAPIKeyAuthentication, TemporaryTokenAuthentication
 from posthog.celery import update_cache_item_task
-from posthog.constants import TREND_FILTER_TYPE_ACTIONS, TREND_FILTER_TYPE_EVENTS, TRENDS_CUMULATIVE, TRENDS_STICKINESS
-from posthog.decorators import FUNNEL_ENDPOINT, TRENDS_ENDPOINT, cached_function
+from posthog.constants import (
+    ENTITY_ID,
+    ENTITY_TYPE,
+    TREND_FILTER_TYPE_ACTIONS,
+    TREND_FILTER_TYPE_EVENTS,
+    TRENDS_STICKINESS,
+)
+from posthog.decorators import CacheType, cached_function
 from posthog.models import (
     Action,
     ActionStep,
-    Cohort,
     CohortPeople,
     DashboardItem,
     Entity,
     Event,
     Filter,
     Person,
-    Team,
-    User,
+    RetentionFilter,
 )
-from posthog.queries import base, funnel, retention, stickiness, trends
+from posthog.models.event import EventManager
+from posthog.models.filters.stickiness_filter import StickinessFilter
+from posthog.models.team import Team
+from posthog.permissions import ProjectMembershipNecessaryPermissions
+from posthog.queries import base, retention, stickiness, trends
 from posthog.tasks.calculate_action import calculate_action
-from posthog.utils import generate_cache_key
+from posthog.utils import generate_cache_key, get_safe_cache
 
-from .person import PersonSerializer
+from .person import PersonSerializer, paginated_result
 
 
 class ActionStepSerializer(serializers.HyperlinkedModelSerializer):
@@ -116,7 +104,7 @@ def get_actions(queryset: QuerySet, params: dict, team_id: int) -> QuerySet:
     return queryset.filter(team_id=team_id).order_by("-id")
 
 
-class ActionViewSet(viewsets.ModelViewSet):
+class ActionViewSet(StructuredViewSetMixin, viewsets.ModelViewSet):
     queryset = Action.objects.all()
     serializer_class = ActionSerializer
     authentication_classes = [
@@ -125,19 +113,20 @@ class ActionViewSet(viewsets.ModelViewSet):
         authentication.SessionAuthentication,
         authentication.BasicAuthentication,
     ]
+    permission_classes = [IsAuthenticated, ProjectMembershipNecessaryPermissions]
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        if self.action == "list":  # type: ignore
+        if self.action == "list":
             queryset = queryset.filter(deleted=False)
-        return get_actions(queryset, self.request.GET.dict(), self.request.user.team.pk)
+        return get_actions(queryset, self.request.GET.dict(), self.team_id)
 
     def create(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
         action, created = Action.objects.get_or_create(
             name=request.data["name"],
-            team=request.user.team,
+            team_id=self.team_id,
             deleted=False,
-            defaults={"post_to_slack": request.data.get("post_to_slack", False), "created_by": request.user,},
+            defaults={"post_to_slack": request.data.get("post_to_slack", False), "created_by": request.user},
         )
         if not created:
             return Response(data={"detail": "action-exists", "id": action.pk}, status=400)
@@ -145,13 +134,18 @@ class ActionViewSet(viewsets.ModelViewSet):
         if request.data.get("steps"):
             for step in request.data["steps"]:
                 ActionStep.objects.create(
-                    action=action, **{key: value for key, value in step.items() if key not in ("isNew", "selection")}
+                    action=action, **{key: value for key, value in step.items() if key not in ("isNew", "selection")},
                 )
+
+        self._calculate_action(action)
+        posthoganalytics.capture(request.user.distinct_id, "action created", action.get_analytics_metadata())
+        return Response(self.serializer_class(action, context={"request": request}).data)
+
+    def _calculate_action(self, action: Action) -> None:
         calculate_action.delay(action_id=action.pk)
-        return Response(ActionSerializer(action, context={"request": request}).data)
 
     def update(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
-        action = Action.objects.get(pk=kwargs["pk"], team=request.user.team)
+        action = Action.objects.get(pk=kwargs["pk"], team_id=self.team_id)
 
         # If there's no steps property at all we just ignore it
         # If there is a step property but it's an empty array [], we'll delete all the steps
@@ -169,7 +163,7 @@ class ActionViewSet(viewsets.ModelViewSet):
                 else:
                     ActionStep.objects.create(
                         action=action,
-                        **{key: value for key, value in step.items() if key not in ("isNew", "selection")}
+                        **{key: value for key, value in step.items() if key not in ("isNew", "selection")},
                     )
 
         serializer = ActionSerializer(action, context={"request": request})
@@ -177,12 +171,17 @@ class ActionViewSet(viewsets.ModelViewSet):
             del request.data["created_by"]
         serializer.update(action, request.data)
         action.is_calculating = True
-        calculate_action.delay(action_id=action.pk)
-        return Response(ActionSerializer(action, context={"request": request}).data)
+        self._calculate_action(action)
+        posthoganalytics.capture(
+            request.user.distinct_id,
+            "action updated",
+            {**action.get_analytics_metadata(), "updated_by_creator": request.user == action.created_by},
+        )
+        return Response(self.serializer_class(action, context={"request": request}).data)
 
     def list(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
         actions = self.get_queryset()
-        actions_list: List[Dict[Any, Any]] = ActionSerializer(actions, many=True, context={"request": request}).data  # type: ignore
+        actions_list: List[Dict[Any, Any]] = self.serializer_class(actions, many=True, context={"request": request}).data  # type: ignore
         if request.GET.get("include_count", False):
             actions_list.sort(key=lambda action: action.get("count", action["id"]), reverse=True)
         return Response({"results": actions_list})
@@ -192,12 +191,16 @@ class ActionViewSet(viewsets.ModelViewSet):
         result = self._calculate_trends(request)
         return Response(result)
 
-    @cached_function(cache_type=TRENDS_ENDPOINT)
+    @cached_function()
     def _calculate_trends(self, request: request.Request) -> List[Dict[str, Any]]:
-        team = request.user.team
+        team = self.team
         filter = Filter(request=request)
-        if filter.shown_as == "Stickiness":
-            result = stickiness.Stickiness().run(filter, team)
+        if filter.shown_as == TRENDS_STICKINESS:
+            earliest_timestamp_func = lambda team_id: Event.objects.earliest_timestamp(team_id)
+            stickiness_filter = StickinessFilter(
+                request=request, team=team, get_earliest_timestamp=earliest_timestamp_func
+            )
+            result = stickiness.Stickiness().run(stickiness_filter, team)
         else:
             result = trends.Trends().run(filter, team)
 
@@ -209,23 +212,24 @@ class ActionViewSet(viewsets.ModelViewSet):
 
     @action(methods=["GET"], detail=False)
     def retention(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
-        team = request.user.team
+        team = self.team
         properties = request.GET.get("properties", "{}")
 
-        filter = Filter(data={"properties": json.loads(properties)})
-
+        data = {"properties": json.loads(properties)}
         start_entity_data = request.GET.get("start_entity", None)
         if start_entity_data:
-            data = json.loads(start_entity_data)
-            filter.entities = [Entity({"id": data["id"], "type": data["type"]})]
+            entity_data = json.loads(start_entity_data)
+            data.update({"entites": [Entity({"id": entity_data["id"], "type": entity_data["type"]})]})
 
-        filter._date_from = "-11d"
+        data.update({"date_from": "-11d"})
+        filter = RetentionFilter(data=data)
+
         result = retention.Retention().run(filter, team)
         return Response({"data": result})
 
     @action(methods=["GET"], detail=False)
     def funnel(self, request: request.Request, *args: Any, **kwargs: Any) -> Response:
-        team = request.user.team
+        team = self.team
         refresh = request.GET.get("refresh", None)
         dashboard_id = request.GET.get("from_dashboard", None)
 
@@ -236,7 +240,7 @@ class ActionViewSet(viewsets.ModelViewSet):
         if refresh:
             cache.delete(cache_key)
         else:
-            cached_result = cache.get(cache_key)
+            cached_result = get_safe_cache(cache_key)
             if cached_result:
                 task_id = cached_result.get("task_id", None)
                 if not task_id:
@@ -245,7 +249,7 @@ class ActionViewSet(viewsets.ModelViewSet):
                     return Response(result)
 
         payload = {"filter": filter.toJSON(), "team_id": team.pk}
-        task = update_cache_item_task.delay(cache_key, FUNNEL_ENDPOINT, payload)
+        task = update_cache_item_task.delay(cache_key, CacheType.FUNNEL, payload)
         task_id = task.id
         cache.set(cache_key, {"task_id": task_id}, 180)  # task will be live for 3 minutes
 
@@ -260,95 +264,81 @@ class ActionViewSet(viewsets.ModelViewSet):
         return Response(result)
 
     def get_people(self, request: request.Request) -> Union[Dict[str, Any], List]:
-        team = request.user.team
+        team = self.team
         filter = Filter(request=request)
-        offset = int(request.GET.get("offset", 0))
+        entity = get_target_entity(request)
 
-        def _calculate_people(events: QuerySet, offset: int):
-            shown_as = request.GET.get("shown_as")
-            if shown_as is not None and shown_as == "Stickiness":
-                stickiness_days = int(request.GET["stickiness_days"])
-                events = (
-                    events.values("person_id")
-                    .annotate(day_count=Count(functions.TruncDay("timestamp"), distinct=True))
-                    .filter(day_count=stickiness_days)
-                )
-            else:
-                events = events.values("person_id").distinct()
-
-            if request.GET.get("breakdown_type") == "cohort" and request.GET.get("breakdown_value") != "all":
-                events = events.filter(
-                    Exists(
-                        CohortPeople.objects.filter(
-                            cohort_id=int(request.GET["breakdown_value"]), person_id=OuterRef("person_id"),
-                        ).only("id")
-                    )
-                )
-            if request.GET.get("breakdown_type") == "person":
-                events = events.filter(
-                    Exists(
-                        Person.objects.filter(
-                            **{
-                                "id": OuterRef("person_id"),
-                                "properties__{}".format(request.GET["breakdown"]): request.GET["breakdown_value"],
-                            }
-                        ).only("id")
-                    )
-                )
-
-            people = Person.objects.filter(team=team, id__in=[p["person_id"] for p in events[offset : offset + 100]],)
-
-            people = people.prefetch_related(Prefetch("persondistinctid_set", to_attr="distinct_ids_cache"))
-
-            return serialize_people(people=people, request=request)
-
-        filtered_events: QuerySet = QuerySet()
-        if request.GET.get("session"):
-            filtered_events = (
-                Event.objects.filter(team=team).filter(base.filter_events(team.pk, filter)).add_person_id(team.pk)
-            )
-        else:
-            if len(filter.entities) >= 1:
-                entity = filter.entities[0]
-            else:
-                entity = Entity({"id": request.GET["entityId"], "type": request.GET["type"]})
-
-            if entity.type == TREND_FILTER_TYPE_EVENTS:
-                filtered_events = base.process_entity_for_events(entity, team_id=team.pk, order_by=None).filter(
-                    base.filter_events(team.pk, filter, entity)
-                )
-            elif entity.type == TREND_FILTER_TYPE_ACTIONS:
-                actions = super().get_queryset()
-                actions = actions.filter(deleted=False)
-                try:
-                    action = actions.get(pk=entity.id)
-                except Action.DoesNotExist:
-                    return []
-                filtered_events = base.process_entity_for_events(entity, team_id=team.pk, order_by=None).filter(
-                    base.filter_events(team.pk, filter, entity)
-                )
-
-        people = _calculate_people(events=filtered_events, offset=offset)
+        events = filter_by_type(entity=entity, team=team, filter=filter)
+        people = calculate_people(team=team, events=events, filter=filter)
+        serialized_people = PersonSerializer(people, context={"request": request}, many=True).data
 
         current_url = request.get_full_path()
-        next_url: Optional[str] = request.get_full_path()
-        if people["count"] > 99 and next_url:
-            if "offset" in next_url:
-                next_url = next_url[1:]
-                next_url = next_url.replace("offset=" + str(offset), "offset=" + str(offset + 100))
-            else:
-                next_url = request.build_absolute_uri(
-                    "{}{}offset={}".format(next_url, "&" if "?" in next_url else "?", offset + 100)
-                )
-        else:
-            next_url = None
+        next_url = paginated_result(serialized_people, request, filter.offset)
 
-        return {"results": [people], "next": next_url, "previous": current_url[1:]}
+        return {
+            "results": [{"people": serialized_people, "count": len(serialized_people)}],
+            "next": next_url,
+            "previous": current_url[1:],
+        }
 
 
-def serialize_people(people: QuerySet, request: request.Request) -> Dict:
-    people_dict = [PersonSerializer(person, context={"request": request}).data for person in people]
-    return {"people": people_dict, "count": len(people_dict)}
+def filter_by_type(entity: Entity, team: Team, filter: Filter) -> QuerySet:
+    events: Union[EventManager, QuerySet] = Event.objects.none()
+    if filter.session:
+        events = Event.objects.filter(team=team).filter(base.filter_events(team.pk, filter)).add_person_id(team.pk)
+    else:
+        if entity.type == TREND_FILTER_TYPE_EVENTS:
+            events = base.process_entity_for_events(entity, team_id=team.pk, order_by=None).filter(
+                base.filter_events(team.pk, filter, entity)
+            )
+        elif entity.type == TREND_FILTER_TYPE_ACTIONS:
+            actions = Action.objects.filter(deleted=False)
+            try:
+                actions.get(pk=entity.id)
+            except Action.DoesNotExist:
+                return events
+            events = base.process_entity_for_events(entity, team_id=team.pk, order_by=None).filter(
+                base.filter_events(team.pk, filter, entity)
+            )
+    return events
+
+
+def _filter_cohort_breakdown(events: QuerySet, filter: Filter) -> QuerySet:
+    if filter.breakdown_type == "cohort" and filter.breakdown_value != "all":
+        events = events.filter(
+            Exists(
+                CohortPeople.objects.filter(
+                    cohort_id=int(filter.breakdown_value), person_id=OuterRef("person_id"),
+                ).only("id")
+            )
+        )
+    return events
+
+
+def _filter_person_prop_breakdown(events: QuerySet, filter: Filter) -> QuerySet:
+    if filter.breakdown_type == "person":
+        events = events.filter(
+            Exists(
+                Person.objects.filter(
+                    **{"id": OuterRef("person_id"), "properties__{}".format(filter.breakdown): filter.breakdown_value,}
+                ).only("id")
+            )
+        )
+    return events
+
+
+def calculate_people(team: Team, events: QuerySet, filter: Filter, use_offset: bool = True) -> QuerySet:
+    events = events.values("person_id").distinct()
+    events = _filter_cohort_breakdown(events, filter)
+    events = _filter_person_prop_breakdown(events, filter)
+
+    people = Person.objects.filter(
+        team=team,
+        id__in=[p["person_id"] for p in (events[filter.offset : filter.offset + 100] if use_offset else events)],
+    )
+
+    people = people.prefetch_related(Prefetch("persondistinctid_set", to_attr="distinct_ids_cache"))
+    return people
 
 
 @receiver(post_save, sender=Action, dispatch_uid="hook-action-defined")
@@ -362,3 +352,7 @@ def action_defined(sender, instance, created, raw, using, **kwargs):
             payload=ActionSerializer(instance).data,
             user=instance.team,
         )
+
+
+class LegacyActionViewSet(ActionViewSet):
+    legacy_team_compatibility = True

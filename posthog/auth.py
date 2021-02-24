@@ -3,7 +3,6 @@ import re
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
-from dateutil import parser
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.http import HttpRequest, JsonResponse
@@ -35,11 +34,9 @@ class PersonalAPIKeyAuthentication(authentication.BaseAuthentication):
             authorization_match = re.match(fr"^{cls.keyword}\s+(\S.+)$", request.META["HTTP_AUTHORIZATION"])
             if authorization_match:
                 return authorization_match.group(1).strip(), "Authorization header"
-        if request_data is None and isinstance(request, Request):
-            data = request.data
-        else:
-            data = request_data or {}
-        if "personal_api_key" in data:
+        data = request.data if request_data is None and isinstance(request, Request) else request_data
+
+        if data and "personal_api_key" in data:
             return data["personal_api_key"], "body"
         if "personal_api_key" in request.GET:
             return request.GET["personal_api_key"], "query string"

@@ -1,11 +1,13 @@
 import React, { useCallback, useState } from 'react'
-import { Select, Tabs } from 'antd'
-import { operatorMap, isOperatorFlag } from 'lib/utils'
-import { PropertyValue } from './PropertyValue'
-import { PropertyKeyInfo, keyMapping } from 'lib/components/PropertyKeyInfo'
+import { Col, Row, Select, Tabs } from 'antd'
+import { keyMapping } from 'lib/components/PropertyKeyInfo'
 import { cohortsModel } from '../../../models/cohortsModel'
 import { useValues, useActions } from 'kea'
 import rrwebBlockClass from 'lib/utils/rrwebBlockClass'
+import { SelectGradientOverflow } from 'lib/components/SelectGradientOverflow'
+import { Link } from '../Link'
+import { PropertySelect } from './PropertySelect'
+import { OperatorValueSelect } from 'lib/components/PropertyFilters/OperatorValueSelect'
 
 const { TabPane } = Tabs
 
@@ -20,132 +22,72 @@ function PropertyPaneContents({
     type,
     displayOperatorAndValue,
 }) {
+    const optionGroups = [
+        {
+            type: 'event',
+            label: 'Event properties',
+            options: eventProperties,
+        },
+        {
+            type: 'person',
+            label: 'User properties',
+            options: personProperties,
+        },
+    ]
+
+    if (eventProperties.length > 0) {
+        optionGroups.push({
+            type: 'element',
+            label: 'Elements',
+            options: ['tag_name', 'text', 'href', 'selector'].map((value) => ({ value, label: value })),
+        })
+    }
+
     return (
         <>
-            <div className={displayOperatorAndValue ? 'col-4 pl-0' : 'col p-0'}>
-                <Select
-                    className={rrwebBlockClass}
-                    showSearch
-                    autoFocus={!propkey}
-                    defaultOpen={!propkey}
-                    placeholder="Property key"
-                    data-attr="property-filter-dropdown"
-                    labelInValue
-                    value={
-                        type === 'cohort'
-                            ? { value: '' }
-                            : {
-                                  value: propkey,
-                                  label:
-                                      keyMapping[type === 'element' ? 'element' : 'event'][propkey]?.label || propkey,
-                              }
-                    }
-                    filterOption={(input, option) => option.value?.toLowerCase().indexOf(input.toLowerCase()) >= 0}
-                    onChange={(_, newKey) =>
-                        setThisFilter(
-                            newKey.value.replace(/^(event_|person_|element_)/gi, ''),
-                            undefined,
-                            operator,
-                            newKey.type
-                        )
-                    }
-                    style={{ width: '100%' }}
-                    virtual={false}
-                >
-                    {eventProperties.length > 0 && (
-                        <Select.OptGroup key="event properties" label="Event properties">
-                            {eventProperties.map((item, index) => (
-                                <Select.Option
-                                    key={'event_' + item.value}
-                                    value={'event_' + item.value}
-                                    type="event"
-                                    data-attr={'prop-filter-event-' + index}
-                                >
-                                    <PropertyKeyInfo value={item.value} />
-                                </Select.Option>
-                            ))}
-                        </Select.OptGroup>
-                    )}
-                    {personProperties && (
-                        <Select.OptGroup key="user properties" label="User properties">
-                            {personProperties.map((item, index) => (
-                                <Select.Option
-                                    key={'person_' + item.value}
-                                    value={'person_' + item.value}
-                                    type="person"
-                                    data-attr={'prop-filter-person-' + index}
-                                >
-                                    <PropertyKeyInfo value={item.value} />
-                                </Select.Option>
-                            ))}
-                        </Select.OptGroup>
-                    )}
-                    {eventProperties.length > 0 && (
-                        <Select.OptGroup key="elements" label="Elements">
-                            {['tag_name', 'text', 'href', 'selector'].map((item, index) => (
-                                <Select.Option
-                                    key={'element_' + item}
-                                    value={'element_' + item}
-                                    type="element"
-                                    data-attr={'prop-filter-element-' + index}
-                                >
-                                    <PropertyKeyInfo value={item} type="element" />
-                                </Select.Option>
-                            ))}
-                        </Select.OptGroup>
-                    )}
-                </Select>
-            </div>
-            {displayOperatorAndValue && (
-                <div className={isOperatorFlag(operator) ? 'col-8 p-0' : 'col-4 pl-0'}>
-                    <Select
-                        style={{ width: '100%' }}
-                        defaultActiveFirstOption
-                        labelInValue
-                        value={{
-                            value: operator || '=',
-                            label: operatorMap[operator || 'exact'],
-                        }}
+            <Row gutter={8} className="full-width">
+                <Col flex={1}>
+                    <PropertySelect
+                        value={
+                            type === 'cohort'
+                                ? null
+                                : {
+                                      value: propkey,
+                                      label:
+                                          keyMapping[type === 'element' ? 'element' : 'event'][propkey]?.label ||
+                                          propkey,
+                                  }
+                        }
+                        onChange={(type, value) =>
+                            setThisFilter(
+                                value,
+                                undefined,
+                                value === '$active_feature_flags' ? 'icontains' : operator,
+                                type
+                            )
+                        }
+                        optionGroups={optionGroups}
+                        autoOpenIfEmpty
                         placeholder="Property key"
-                        onChange={(_, newOperator) => {
-                            let newValue = value
-                            if (isOperatorFlag(newOperator.value)) {
-                                // change value to induce reload
-                                newValue = newOperator.value
-                                onComplete()
-                            } else {
-                                // clear value if switching from nonparametric (flag) to parametric
-                                if (isOperatorFlag(operator)) newValue = undefined
-                            }
-                            setThisFilter(propkey, newValue, newOperator.value, type)
-                        }}
-                    >
-                        {Object.keys(operatorMap).map((operator) => (
-                            <Select.Option key={operator} value={operator}>
-                                {operatorMap[operator || 'exact']}
-                            </Select.Option>
-                        ))}
-                    </Select>
-                </div>
-            )}
-            {displayOperatorAndValue && !isOperatorFlag(operator) && (
-                <div className="col-4 p-0">
-                    <PropertyValue
+                    />
+                </Col>
+
+                {displayOperatorAndValue && (
+                    <OperatorValueSelect
                         type={type}
-                        key={propkey}
-                        propertyKey={propkey}
+                        propkey={propkey}
                         operator={operator}
                         value={value}
-                        onSet={(value) => {
-                            onComplete()
-                            setThisFilter(propkey, value, operator, type)
+                        onChange={(newOperator, newValue) => {
+                            setThisFilter(propkey, newValue, newOperator, type)
+                            if (newOperator && newValue) {
+                                onComplete()
+                            }
                         }}
+                        columnOptions={{ flex: 1 }}
                     />
-                    {(operator === 'gt' || operator === 'lt') && isNaN(value) && (
-                        <p className="text-danger">Value needs to be a number. Try "equals" or "contains" instead.</p>
-                    )}
-                </div>
-            )}
+                )}
+            </Row>
         </>
     )
 }
@@ -155,7 +97,7 @@ function CohortPaneContents({ onComplete, setThisFilter, value, displayOperatorA
 
     return (
         <>
-            <Select
+            <SelectGradientOverflow
                 className={rrwebBlockClass}
                 style={{ width: '100%' }}
                 showSearch
@@ -186,7 +128,7 @@ function CohortPaneContents({ onComplete, setThisFilter, value, displayOperatorA
                         {item.name}
                     </Select.Option>
                 ))}
-            </Select>
+            </SelectGradientOverflow>
         </>
     )
 }
@@ -235,6 +177,11 @@ export function PropertyFilter({ index, onComplete, logic }) {
                     value={value}
                     displayOperatorAndValue={displayOperatorAndValue}
                 />
+                {type === 'cohort' && value ? (
+                    <Link to={`/cohorts/${value}`} target="_blank">
+                        <Col style={{ marginLeft: 10, marginTop: 5 }}> View </Col>
+                    </Link>
+                ) : null}
             </TabPane>
         </Tabs>
     )

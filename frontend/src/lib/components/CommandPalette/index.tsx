@@ -6,7 +6,7 @@ import { CommandInput } from './CommandInput'
 import { CommandResults } from './CommandResults'
 import { userLogic } from 'scenes/userLogic'
 import { useEventListener } from 'lib/hooks/useEventListener'
-import squeakFile from './../../../../public/squeak.mp3'
+import squeakFile from 'public/squeak.mp3'
 import './index.scss'
 
 export function CommandPalette(): JSX.Element | null {
@@ -29,22 +29,36 @@ export function CommandPalette(): JSX.Element | null {
         } else if (event.key === 'Escape') {
             event.preventDefault()
             // Return to previous flow
-            if (activeFlow) backFlow()
+            if (activeFlow) {
+                backFlow()
+            }
             // If no flw, erase input
-            else if (input) setInput('')
+            else if (input) {
+                setInput('')
+            }
             // Lastly hide palette
-            else hidePalette()
+            else {
+                hidePalette()
+            }
         } else if (event.key === 'k' && (event.ctrlKey || event.metaKey)) {
             event.preventDefault()
             togglePalette()
         }
     })
 
-    useOutsideClickHandler(boxRef, hidePalette)
+    useOutsideClickHandler(
+        boxRef,
+        () => {
+            if (isPaletteShown) {
+                hidePalette()
+            }
+        },
+        [boxRef, isPaletteShown]
+    )
 
     return !user || !isPaletteShown ? null : (
         <div className="palette__overlay">
-            <div className="palette__box card bg-dark" ref={boxRef}>
+            <div className="palette__box" ref={boxRef}>
                 {(!activeFlow || activeFlow.instruction) && <CommandInput />}
                 {!commandSearchResults.length && !activeFlow ? null : <CommandResults executeResult={executeResult} />}
             </div>

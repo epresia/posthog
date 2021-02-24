@@ -3,7 +3,8 @@ import api from './api'
 import { toast } from 'react-toastify'
 import { Spin } from 'antd'
 import moment from 'moment'
-import { EventType } from '~/types'
+import { EventType, FilterType } from '~/types'
+import { lightColors } from 'lib/colors'
 
 const SI_PREFIXES: { value: number; symbol: string }[] = [
     { value: 1e18, symbol: 'E' },
@@ -24,7 +25,9 @@ export function uuid(): string {
 
 export function toParams(obj: Record<string, any>): string {
     function handleVal(val: any): string {
-        if (val._isAMomentObject) return encodeURIComponent(val.format('YYYY-MM-DD'))
+        if (val._isAMomentObject) {
+            return encodeURIComponent(val.format('YYYY-MM-DD'))
+        }
         val = typeof val === 'object' ? JSON.stringify(val) : val
         return encodeURIComponent(val)
     }
@@ -35,16 +38,16 @@ export function toParams(obj: Record<string, any>): string {
 }
 
 export function fromParams(): Record<string, any> {
-    return window.location.search === ''
+    return !window.location.search
         ? {}
         : window.location.search
               .slice(1)
               .split('&')
-              .reduce((a, b) => {
-                  b = b.split('=')
-                  a[b[0]] = decodeURIComponent(b[1])
-                  return a
-              }, {})
+              .reduce((paramsObject, paramString) => {
+                  const [key, value] = paramString.split('=')
+                  paramsObject[key] = decodeURIComponent(value)
+                  return paramsObject
+              }, {} as Record<string, any>)
 }
 
 export const colors = ['success', 'secondary', 'warning', 'primary', 'danger', 'info', 'dark', 'light']
@@ -58,9 +61,9 @@ export function percentage(division: number): string {
         : ''
 }
 
-export function Loading(): JSX.Element {
+export function Loading(props: Record<string, any>): JSX.Element {
     return (
-        <div className="loading-overlay">
+        <div className="loading-overlay" style={props.style}>
             <Spin />
         </div>
     )
@@ -90,30 +93,8 @@ export function SceneLoading(): JSX.Element {
     )
 }
 
-export function CloseButton(props: Record<string, any>): JSX.Element {
-    return (
-        <span {...props} className={'close cursor-pointer ' + props.className} style={{ ...props.style }}>
-            <span aria-hidden="true">&times;</span>
-        </span>
-    )
-}
-
-export function Card(props: Record<string, any>): JSX.Element {
-    return (
-        <div
-            {...props}
-            className={'card' + (props.className ? ` ${props.className}` : '')}
-            style={props.style}
-            title=""
-        >
-            {props.title && <div className="card-header">{props.title}</div>}
-            {props.children}
-        </div>
-    )
-}
-
 export function deleteWithUndo({ undo = false, ...props }: Record<string, any>): void {
-    api.update('api/' + props.endpoint + '/' + props.object.id, {
+    api.update(`api/${props.endpoint}/${props.object.id}`, {
         ...props.object,
         deleted: !undo,
     }).then(() => {
@@ -121,7 +102,7 @@ export function deleteWithUndo({ undo = false, ...props }: Record<string, any>):
         const response = (
             <span>
                 <b>{props.object.name ?? 'Untitled'}</b>
-                {!undo ? ' deleted. Click here to undo.' : ' deletion undone.'}
+                {!undo ? ' deleted. Click to undo.' : ' deletion undone.'}
             </span>
         )
         toast(response, {
@@ -137,11 +118,12 @@ export function DeleteWithUndo(
     props: PropsWithChildren<{
         endpoint: string
         object: {
-            name: string
+            name?: string
             id: number
         }
         className: string
         style: CSSProperties
+        callback: () => void
     }>
 ): JSX.Element {
     const { className, style, children } = props
@@ -150,6 +132,7 @@ export function DeleteWithUndo(
             href="#"
             onClick={(e) => {
                 e.preventDefault()
+                e.stopPropagation()
                 deleteWithUndo(props)
             }}
             className={className}
@@ -188,21 +171,6 @@ export const selectStyle: Record<string, (base: Partial<CSSProperties>) => Parti
     }),
 }
 
-export function debounce(func: (...args: any) => void, wait: number, immediate: boolean, ...args: any): () => void {
-    let timeout: number | undefined
-    return function () {
-        const context = this // eslint-disable-line
-        function later(): void {
-            timeout = undefined
-            if (!immediate) func.apply(context, args)
-        }
-        const callNow = immediate && !timeout
-        clearTimeout(timeout)
-        timeout = setTimeout(later, wait)
-        if (callNow) func.apply(context, args)
-    }
-}
-
 export function capitalizeFirstLetter(string: string): string {
     return string.charAt(0).toUpperCase() + string.slice(1)
 }
@@ -225,6 +193,19 @@ export function isOperatorFlag(operator: string): boolean {
     return ['is_set', 'is_not_set'].includes(operator)
 }
 
+export function isOperatorRegex(operator: string): boolean {
+    return ['regex', 'not_regex'].includes(operator)
+}
+
+export function isValidRegex(value: string): boolean {
+    try {
+        new RegExp(value)
+        return true
+    } catch {
+        return false
+    }
+}
+
 export function formatPropertyLabel(
     item: Record<string, any>,
     cohorts: Record<string, any>[],
@@ -244,10 +225,21 @@ export function formatProperty(property: Record<string, any>): string {
 }
 
 // Format a label that gets returned from the /insights api
-export function formatLabel(label: string, action: Record<string, any>): string {
-    const math = 'Total'
-    if (action.math === 'dau') label += ` (${action.math.toUpperCase()}) `
-    else label += ` (${math}) `
+export function formatLabel(
+    label: string,
+    action: {
+        math: string
+        math_property?: string
+        properties?: { operator: string; value: any }[]
+    }
+): string {
+    if (action.math === 'dau') {
+        label += ` (Active Users) `
+    } else if (['sum', 'avg', 'min', 'max', 'median', 'p90', 'p95', 'p99'].includes(action.math)) {
+        label += ` (${action.math} of ${action.math_property}) `
+    } else {
+        label += ' (Total) '
+    }
     if (action?.properties?.length) {
         label += ` (${action.properties
             .map((property) => operatorMap[property.operator || 'exact'].split(' ')[0] + ' ' + property.value)
@@ -257,15 +249,19 @@ export function formatLabel(label: string, action: Record<string, any>): string 
 }
 
 export function deletePersonData(person: Record<string, any>, callback: () => void): void {
+    // DEPRECATED: Remove after releasing PersonsV2 (persons-2353)
     if (window.confirm('Are you sure you want to delete this user? This cannot be undone')) {
         api.delete('api/person/' + person.id).then(() => {
             toast('Person succesfully deleted.')
-            if (callback) callback()
+            if (callback) {
+                callback()
+            }
         })
     }
 }
 
 export function savePersonData(person: Record<string, any>): void {
+    // DEPRECATED: Remove after releasing PersonsV2 (persons-2353)
     api.update('api/person/' + person.id, person).then(() => {
         toast('Person Updated')
     })
@@ -287,9 +283,9 @@ export function delay(ms: number): Promise<number> {
     return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
-// Trigger a window.reisize event a few times 0...2 sec after the menu was collapsed/expanded
-// We need this so the dashboard resizes itself properly, as the available div width will still
-// change when the sidebar's expansion is animating.
+/**
+ * Trigger a resize event on window.
+ */
 export function triggerResize(): void {
     try {
         window.dispatchEvent(new Event('resize'))
@@ -297,6 +293,12 @@ export function triggerResize(): void {
         // will break on IE11
     }
 }
+
+/**
+ * Trigger a resize event on window a few times between 10 to 2000 ms after the menu was collapsed/expanded.
+ * We need this so the dashboard resizes itself properly, as the available div width will still
+ * change when the sidebar's expansion is animating.
+ */
 export function triggerResizeAfterADelay(): void {
     for (const delay of [10, 100, 500, 750, 1000, 2000]) {
         window.setTimeout(triggerResize, delay)
@@ -354,17 +356,26 @@ export function humanFriendlyDiff(from: moment.MomentInput, to: moment.MomentInp
     return humanFriendlyDuration(diff)
 }
 
-export function humanFriendlyDetailedTime(date: moment.MomentInput, withSeconds: boolean = false): string {
+export function humanFriendlyDetailedTime(date: moment.MomentInput | null, withSeconds: boolean = false): string {
+    if (!date) {
+        return 'Never'
+    }
     let formatString = 'MMMM Do YYYY h:mm'
     const today = moment().startOf('day')
     const yesterday = today.clone().subtract(1, 'days').startOf('day')
+    if (moment(date).isSame(moment(), 'm')) {
+        return 'Just now'
+    }
     if (moment(date).isSame(today, 'd')) {
         formatString = '[Today] h:mm'
     } else if (moment(date).isSame(yesterday, 'd')) {
         formatString = '[Yesterday] h:mm'
     }
-    if (withSeconds) formatString += ':ss a'
-    else formatString += ' a'
+    if (withSeconds) {
+        formatString += ':ss a'
+    } else {
+        formatString += ' a'
+    }
     return moment(date).format(formatString)
 }
 
@@ -374,19 +385,38 @@ export function stripHTTP(url: string): string {
     return url
 }
 
-export function isURL(string: string): boolean {
-    if (!string) return false
+export function isURL(input: any): boolean {
+    if (!input || typeof input !== 'string') {
+        return false
+    }
     // https://stackoverflow.com/questions/3809401/what-is-a-good-regular-expression-to-match-a-url
     const regexp = /^\s*https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi
+    return !!input.match?.(regexp)
+}
+
+export function isEmail(string: string): boolean {
+    if (!string) {
+        return false
+    }
+    // https://html.spec.whatwg.org/multipage/input.html#valid-e-mail-address
+    const regexp = /^[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/
     return !!string.match?.(regexp)
 }
 
 export function eventToName(event: EventType): string {
-    if (event.event !== '$autocapture') return event.event
+    if (event.event !== '$autocapture') {
+        return event.event
+    }
     let name = ''
-    if (event.properties.$event_type === 'click') name += 'clicked '
-    if (event.properties.$event_type === 'change') name += 'typed something into '
-    if (event.properties.$event_type === 'submit') name += 'submitted '
+    if (event.properties.$event_type === 'click') {
+        name += 'clicked '
+    }
+    if (event.properties.$event_type === 'change') {
+        name += 'typed something into '
+    }
+    if (event.properties.$event_type === 'submit') {
+        name += 'submitted '
+    }
 
     if (event.elements.length > 0) {
         if (event.elements[0].tag_name === 'a') {
@@ -396,7 +426,9 @@ export function eventToName(event: EventType): string {
         } else {
             name += event.elements[0].tag_name
         }
-        if (event.elements[0].text) name += ' with text "' + event.elements[0].text + '"'
+        if (event.elements[0].text) {
+            name += ' with text "' + event.elements[0].text + '"'
+        }
     }
     return name
 }
@@ -407,21 +439,29 @@ export function determineDifferenceType(
 ): 'year' | 'month' | 'week' | 'day' | 'hour' | 'minute' | 'second' {
     const first = moment(firstDate)
     const second = moment(secondDate)
-    if (first.diff(second, 'years') !== 0) return 'year'
-    else if (first.diff(second, 'months') !== 0) return 'month'
-    else if (first.diff(second, 'weeks') !== 0) return 'week'
-    else if (first.diff(second, 'days') !== 0) return 'day'
-    else if (first.diff(second, 'hours') !== 0) return 'hour'
-    else return 'minute'
+    if (first.diff(second, 'years') !== 0) {
+        return 'year'
+    } else if (first.diff(second, 'months') !== 0) {
+        return 'month'
+    } else if (first.diff(second, 'weeks') !== 0) {
+        return 'week'
+    } else if (first.diff(second, 'days') !== 0) {
+        return 'day'
+    } else if (first.diff(second, 'hours') !== 0) {
+        return 'hour'
+    } else {
+        return 'minute'
+    }
 }
 
 export const dateMapping: Record<string, string[]> = {
+    Custom: [],
     Today: ['dStart'],
     Yesterday: ['-1d', 'dStart'],
     'Last 24 hours': ['-24h'],
     'Last 48 hours': ['-48h'],
-    'Last week': ['-7d'],
-    'Last 2 weeks': ['-14d'],
+    'Last 7 days': ['-7d'],
+    'Last 14 days': ['-14d'],
     'Last 30 days': ['-30d'],
     'Last 90 days': ['-90d'],
     'This month': ['mStart'],
@@ -432,21 +472,35 @@ export const dateMapping: Record<string, string[]> = {
 
 export const isDate = /([0-9]{4}-[0-9]{2}-[0-9]{2})/
 
-export function dateFilterToText(dateFrom: string | moment.Moment, dateTo: string | moment.Moment): string {
-    if (moment.isMoment(dateFrom) && moment.isMoment(dateTo))
+export function dateFilterToText(
+    dateFrom: string | moment.Moment | undefined,
+    dateTo: string | moment.Moment | undefined,
+    defaultValue: string
+): string {
+    if (moment.isMoment(dateFrom) && moment.isMoment(dateTo)) {
         return `${dateFrom.format('YYYY-MM-DD')} - ${dateTo.format('YYYY-MM-DD')}`
+    }
     dateFrom = dateFrom as string
     dateTo = dateTo as string
-    if (isDate.test(dateFrom) && isDate.test(dateTo)) return `${dateFrom} - ${dateTo}`
-    if (dateFrom === 'dStart') return 'Today' // Changed to "last 24 hours" but this is backwards compatibility
-    let name = 'Last 7 days'
+    if (isDate.test(dateFrom) && isDate.test(dateTo)) {
+        return `${dateFrom} - ${dateTo}`
+    }
+    if (dateFrom === 'dStart') {
+        return 'Today'
+    } // Changed to "last 24 hours" but this is backwards compatibility
+    let name = defaultValue
     Object.entries(dateMapping).map(([key, value]) => {
-        if (value[0] === dateFrom && value[1] === dateTo) name = key
+        if (value[0] === dateFrom && value[1] === dateTo && key !== 'Custom') {
+            name = key
+        }
     })[0]
     return name
 }
 
 export function humanizeNumber(number: number, digits: number = 1): string {
+    if (number === null) {
+        return '-'
+    }
     // adapted from https://stackoverflow.com/a/9462382/624476
     let matchingPrefix = SI_PREFIXES[SI_PREFIXES.length - 1]
     for (const currentPrefix of SI_PREFIXES) {
@@ -459,10 +513,17 @@ export function humanizeNumber(number: number, digits: number = 1): string {
 }
 
 export function copyToClipboard(value: string, description?: string): boolean {
-    const descriptionAdjusted = description ? description.trim() + ' ' : ''
+    const descriptionAdjusted = description
+        ? description.charAt(0).toUpperCase() + description.slice(1).trim() + ' '
+        : ''
     try {
         navigator.clipboard.writeText(value)
-        toast.success(`Copied ${descriptionAdjusted}to clipboard!`)
+        toast(
+            <div>
+                <h1 className="text-success">Copied to clipboard!</h1>
+                <p>{descriptionAdjusted} has been copied to your clipboard.</p>
+            </div>
+        )
         return true
     } catch (e) {
         toast.error(`Could not copy ${descriptionAdjusted}to clipboard: ${e}`)
@@ -490,7 +551,9 @@ export function groupBy<T>(items: T[], groupResolver: (item: T) => string | numb
     const itemsGrouped: Record<string | number, T[]> = {}
     for (const item of items) {
         const group = groupResolver(item)
-        if (!(group in itemsGrouped)) itemsGrouped[group] = [] // Ensure there's an array to push to
+        if (!(group in itemsGrouped)) {
+            itemsGrouped[group] = []
+        } // Ensure there's an array to push to
         itemsGrouped[group].push(item)
     }
     return itemsGrouped
@@ -501,7 +564,7 @@ export function uniqueBy<T>(items: T[], uniqueResolver: (item: T) => any): T[] {
     const itemsUnique: T[] = []
     for (const item of items) {
         const uniqueKey = uniqueResolver(item)
-        if (!uniqueKeysSoFar.has(uniqueKeysSoFar)) {
+        if (!uniqueKeysSoFar.has(uniqueKey)) {
             uniqueKeysSoFar.add(uniqueKey)
             itemsUnique.push(item)
         }
@@ -510,14 +573,177 @@ export function uniqueBy<T>(items: T[], uniqueResolver: (item: T) => any): T[] {
 }
 
 export function sample<T>(items: T[], size: number): T[] {
-    if (size > items.length) throw Error('Sample size cannot exceed items array length!')
+    if (size > items.length) {
+        throw Error('Sample size cannot exceed items array length!')
+    }
     const results: T[] = []
     const internalItems = [...items]
-    if (size === items.length) return internalItems
+    if (size === items.length) {
+        return internalItems
+    }
     for (let i = 0; i < size; i++) {
         const index = Math.floor(Math.random() * internalItems.length)
         results.push(internalItems[index])
         internalItems.splice(index, 1)
     }
     return results
+}
+
+export function sampleSingle<T>(items: T[]): T[] {
+    if (!items.length) {
+        throw Error('Items array is empty!')
+    }
+    return [items[Math.floor(Math.random() * items.length)]]
+}
+
+/** Convert camelCase, PascalCase or snake_case to Title Case. */
+export function identifierToHuman(identifier: string | number): string {
+    const words: string[] = []
+    let currentWord: string = ''
+    String(identifier)
+        .trim()
+        .split('')
+        .forEach((character) => {
+            if (character === '_' || character === '-') {
+                if (currentWord) {
+                    words.push(currentWord)
+                }
+                currentWord = ''
+            } else if (
+                character === character.toLowerCase() &&
+                (!'0123456789'.includes(character) ||
+                    (currentWord && '0123456789'.includes(currentWord[currentWord.length - 1])))
+            ) {
+                currentWord += character
+            } else {
+                if (currentWord) {
+                    words.push(currentWord)
+                }
+                currentWord = character.toLowerCase()
+            }
+        })
+    if (currentWord) {
+        words.push(currentWord)
+    }
+    return words.map((word) => word[0].toUpperCase() + word.slice(1)).join(' ')
+}
+
+export function parseGithubRepoURL(url: string): Record<string, string> {
+    const match = url.match(/^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/?$/)
+    if (!match) {
+        throw new Error('Must be in the format: https://github.com/user/repo')
+    }
+    const [, user, repo] = match
+    return { user, repo }
+}
+
+export function someParentMatchesSelector(element: HTMLElement, selector: string): boolean {
+    if (element.matches(selector)) {
+        return true
+    }
+    return element.parentElement ? someParentMatchesSelector(element.parentElement, selector) : false
+}
+
+export function hashCodeForString(s: string): number {
+    /* Hash function that returns a number for a given string. Useful for using the same colors for tags or avatars.
+    Forked from https://github.com/segmentio/evergreen/
+    */
+    let hash = 0
+    if (s.trim().length === 0) {
+        return hash
+    }
+    for (let i = 0; i < s.length; i++) {
+        const char = s.charCodeAt(i)
+        hash = (hash << 5) - hash + char
+        hash &= hash // Convert to 32bit integer
+    }
+    return Math.abs(hash)
+}
+
+export function colorForString(s: string): string {
+    /*
+    Returns a color name for a given string, where the color will always be the same for the same string.
+    */
+    return lightColors[hashCodeForString(s) % lightColors.length]
+}
+
+export function midEllipsis(input: string, maxLength: number): string {
+    /* Truncates a string (`input`) in the middle. `maxLength` represents the desired maximum length of the output string
+     excluding the ... */
+    if (input.length <= maxLength) {
+        return input
+    }
+
+    const middle = Math.ceil(input.length / 2)
+    const excess = Math.ceil((input.length - maxLength) / 2)
+    return `${input.substring(0, middle - excess)}...${input.substring(middle + excess)}`
+}
+
+export const disableMinuteFor: Record<string, boolean> = {
+    dStart: false,
+    '-1d': false,
+    '-7d': true,
+    '-14d': true,
+    '-30d': true,
+    '-90d': true,
+    mStart: true,
+    '-1mStart': true,
+    yStart: true,
+    all: true,
+    other: false,
+}
+
+export const disableHourFor: Record<string, boolean> = {
+    dStart: false,
+    '-1d': false,
+    '-7d': false,
+    '-14d': false,
+    '-30d': false,
+    '-90d': true,
+    mStart: false,
+    '-1mStart': false,
+    yStart: true,
+    all: true,
+    other: false,
+}
+
+export function autocorrectInterval(filters: Partial<FilterType>): string {
+    if (!filters.interval) {
+        return 'day'
+    } // undefined/uninitialized
+
+    const minute_disabled = disableMinuteFor[filters.date_from || 'other'] && filters.interval === 'minute'
+    const hour_disabled = disableHourFor[filters.date_from || 'other'] && filters.interval === 'hour'
+
+    if (minute_disabled) {
+        return 'hour'
+    } else if (hour_disabled) {
+        return 'day'
+    } else {
+        return filters.interval
+    }
+}
+
+function suffixFormatted(value: number, base: number, suffix: string, maxDecimals: number): string {
+    /* Helper function for compactNumber */
+    const multiplier = 10 ** maxDecimals
+    return `${Math.round((value * multiplier) / base) / multiplier}${suffix}`
+}
+
+export function compactNumber(value: number, maxDecimals: number = 1): string {
+    /*
+    Returns a number in a compact format with a thousands or millions suffix if applicable.
+    Server-side equivalent posthog_filters.py#compact_number
+    Example:
+      compactNumber(5500000)
+      =>  "5.5M"
+    */
+    if (value < 1000) {
+        return Math.floor(value).toString()
+    } else if (value < 1000000) {
+        return suffixFormatted(value, 1000, 'K', maxDecimals)
+    } else if (value < 1000000000) {
+        return suffixFormatted(value, 1000000, 'M', maxDecimals)
+    }
+    return suffixFormatted(value, 1000000000, 'B', maxDecimals)
 }

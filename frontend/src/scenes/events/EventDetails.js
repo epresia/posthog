@@ -12,12 +12,16 @@ export function EventDetails({ event }) {
     const [showHiddenProps, setShowHiddenProps] = useState(false)
 
     let displayedEventProperties = {}
+    let visibleHiddenProperties = {}
     let hiddenPropsCount = 0
     for (let key of Object.keys(event.properties)) {
         if (keyMapping.event[key] && keyMapping.event[key].hide) {
             hiddenPropsCount += 1
+            if (showHiddenProps) {
+                visibleHiddenProperties[key] = event.properties[key]
+            }
         }
-        if (!keyMapping.event[key] || !keyMapping.event[key].hide || showHiddenProps) {
+        if (!keyMapping.event[key] || !keyMapping.event[key].hide) {
             displayedEventProperties[key] = event.properties[key]
         }
     }
@@ -31,6 +35,7 @@ export function EventDetails({ event }) {
             >
                 Create action from event
             </Button>
+
             <Tabs
                 style={{ float: 'left', width: '100%', marginTop: -40 }}
                 data-attr="event-details"
@@ -42,6 +47,7 @@ export function EventDetails({ event }) {
                         properties={{
                             $timestamp: moment(event.timestamp).toISOString(),
                             ...displayedEventProperties,
+                            ...visibleHiddenProperties,
                         }}
                     />
                     {hiddenPropsCount > 0 && (

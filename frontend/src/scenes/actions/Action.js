@@ -1,7 +1,5 @@
 import React from 'react'
-import { Events } from '../events/Events'
 import { ActionEdit } from './ActionEdit'
-import { ActionEdit as ActionEditV2 } from './ActionEditV2'
 import { useActions, useValues } from 'kea'
 import { router } from 'kea-router'
 import { userLogic } from 'scenes/userLogic'
@@ -10,7 +8,7 @@ import api from 'lib/api'
 import { kea } from 'kea'
 import { Spin } from 'antd'
 import { hot } from 'react-hot-loader/root'
-import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
+import { EventsTable } from 'scenes/events'
 
 let actionLogic = kea({
     key: (props) => props.id || 'new',
@@ -66,17 +64,6 @@ let actionLogic = kea({
     }),
 })
 
-const EditComponent = (props) => {
-    const { featureFlags } = useValues(featureFlagLogic)
-
-    return (
-        <>
-            {!featureFlags['actions-ux-201012'] && <ActionEdit {...props} />}
-            {featureFlags['actions-ux-201012'] && <ActionEditV2 {...props} />}
-        </>
-    )
-}
-
 export const Action = hot(_Action)
 function _Action({ id }) {
     const fixedFilters = { action_id: id }
@@ -86,16 +73,10 @@ function _Action({ id }) {
     const { fetchEvents } = useActions(eventsTableLogic({ fixedFilters }))
     const { isComplete } = useValues(actionLogic({ id, onComplete: fetchEvents }))
     const { loadAction } = useActions(actionLogic({ id, onComplete: fetchEvents }))
-    const { featureFlags } = useValues(featureFlagLogic)
 
     return (
         <div>
-            {!featureFlags['actions-ux-201012'] && <h1>{id ? 'Edit action' : 'New Action'}</h1>}
-            {featureFlags['actions-ux-201012'] && (
-                <h1 className="page-header">{id ? 'Editing action' : 'Creating action'}</h1>
-            )}
-
-            <EditComponent
+            <ActionEdit
                 apiURL=""
                 actionId={id}
                 user={user}
@@ -108,14 +89,14 @@ function _Action({ id }) {
             />
             {id && !isComplete && (
                 <div style={{ marginBottom: '10rem' }}>
-                    <h1 className="page-header">Events</h1>
+                    <h2 className="subtitle">Events</h2>
                     <Spin style={{ marginRight: 12 }} />
                     Calculating action, please hold on.
                 </div>
             )}
             {isComplete && (
                 <div style={{ marginTop: 64 }}>
-                    <Events key={isComplete} fixedFilters={fixedFilters} filtersEnabled={false} />
+                    <EventsTable key={isComplete} fixedFilters={fixedFilters} filtersEnabled={false} />
                 </div>
             )}
         </div>

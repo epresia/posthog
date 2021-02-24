@@ -1,4 +1,4 @@
-from ee.kafka.topics import KAFKA_OMNI_PERSON, KAFKA_PERSON, KAFKA_PERSON_UNIQUE_ID
+from ee.kafka_client.topics import KAFKA_PERSON, KAFKA_PERSON_UNIQUE_ID
 
 from .clickhouse import KAFKA_COLUMNS, STORAGE_POLICY, kafka_engine, table_engine
 
@@ -9,6 +9,7 @@ DROP TABLE person
 DROP_PERSON_DISTINCT_ID_TABLE_SQL = """
 DROP TABLE person_distinct_id
 """
+
 
 PERSONS_TABLE = "person"
 
@@ -37,7 +38,7 @@ PERSONS_TABLE_SQL = (
 )
 
 KAFKA_PERSONS_TABLE_SQL = PERSONS_TABLE_BASE_SQL.format(
-    table_name="kafka_" + PERSONS_TABLE, engine=kafka_engine(KAFKA_PERSON), extra_fields=""
+    table_name="kafka_" + PERSONS_TABLE, engine=kafka_engine(KAFKA_PERSON), extra_fields="",
 )
 
 PERSONS_TABLE_MV_SQL = """
@@ -56,61 +57,27 @@ FROM kafka_{table_name}
     table_name=PERSONS_TABLE
 )
 
-
-OMNI_PERSONS_TABLE = "omni_person"
-
-OMNI_PERSONS_TABLE_BASE_SQL = """
-CREATE TABLE {table_name} 
-(
-    uuid UUID,
-    event_uuid UUID,
-    team_id Int64,
-    distinct_id VARCHAR,
-    properties VARCHAR,
-    is_identified Boolean,
-    ts DateTime64
-    {extra_fields}
-) ENGINE = {engine} 
+GET_LATEST_PERSON_SQL = """
+SELECT * FROM person JOIN (
+    SELECT id, max(created_at) as created_at FROM person WHERE team_id = %(team_id)s GROUP BY id
+) as person_max ON person.id = person_max.id AND person.created_at = person_max.created_at
+WHERE team_id = %(team_id)s
+{query}
 """
 
-OMNI_PERSONS_TABLE_SQL = (
-    OMNI_PERSONS_TABLE_BASE_SQL
-    + """Order By (team_id, uuid, distinct_id)
-{storage_policy}
-"""
-).format(
-    table_name=OMNI_PERSONS_TABLE,
-    engine=table_engine(OMNI_PERSONS_TABLE, "_timestamp"),
-    extra_fields=KAFKA_COLUMNS,
-    storage_policy=STORAGE_POLICY,
-)
-
-KAFKA_OMNI_PERSONS_TABLE_SQL = OMNI_PERSONS_TABLE_BASE_SQL.format(
-    table_name="kafka_" + OMNI_PERSONS_TABLE, engine=kafka_engine(KAFKA_OMNI_PERSON), extra_fields=""
-)
-
-OMNI_PERSONS_TABLE_MV_SQL = """
-CREATE MATERIALIZED VIEW {table_name}_mv 
-TO {table_name} 
-AS SELECT
-uuid,
-event_uuid,
-team_id,
-distinct_id,
-properties,
-is_identified,
-ts,
-_timestamp,
-_offset
-FROM kafka_{table_name} 
+GET_LATEST_PERSON_ID_SQL = """
+(select id from (
+    {latest_person_sql}
+))
 """.format(
-    table_name=OMNI_PERSONS_TABLE
+    latest_person_sql=GET_LATEST_PERSON_SQL
 )
-
 
 GET_PERSON_SQL = """
-SELECT * FROM person WHERE team_id = %(team_id)s
-"""
+SELECT * FROM ({latest_person_sql}) person WHERE team_id = %(team_id)s
+""".format(
+    latest_person_sql=GET_LATEST_PERSON_SQL
+)
 
 PERSONS_DISTINCT_ID_TABLE = "person_distinct_id"
 
@@ -138,7 +105,7 @@ PERSONS_DISTINCT_ID_TABLE_SQL = (
 )
 
 KAFKA_PERSONS_DISTINCT_ID_TABLE_SQL = PERSONS_DISTINCT_ID_TABLE_BASE_SQL.format(
-    table_name="kafka_" + PERSONS_DISTINCT_ID_TABLE, engine=kafka_engine(KAFKA_PERSON_UNIQUE_ID), extra_fields=""
+    table_name="kafka_" + PERSONS_DISTINCT_ID_TABLE, engine=kafka_engine(KAFKA_PERSON_UNIQUE_ID), extra_fields="",
 )
 
 PERSONS_DISTINCT_ID_TABLE_MV_SQL = """
@@ -156,6 +123,50 @@ FROM kafka_{table_name}
     table_name=PERSONS_DISTINCT_ID_TABLE
 )
 
+#
+# Static Cohort
+#
+
+PERSON_STATIC_COHORT_TABLE = "person_static_cohort"
+PERSON_STATIC_COHORT_BASE_SQL = """
+CREATE TABLE {table_name} 
+(
+    id UUID,
+    person_id UUID,
+    cohort_id Int64,
+    team_id Int64
+    {extra_fields}
+) ENGINE = {engine} 
+"""
+
+PERSON_STATIC_COHORT_TABLE_SQL = (
+    PERSON_STATIC_COHORT_BASE_SQL
+    + """Order By (team_id, cohort_id, person_id, id)
+{storage_policy}
+"""
+).format(
+    table_name=PERSON_STATIC_COHORT_TABLE,
+    engine=table_engine(PERSON_STATIC_COHORT_TABLE, "_timestamp"),
+    storage_policy=STORAGE_POLICY,
+    extra_fields=KAFKA_COLUMNS,
+)
+
+DROP_PERSON_STATIC_COHORT_TABLE_SQL = """
+DROP TABLE {}
+""".format(
+    PERSON_STATIC_COHORT_TABLE
+)
+
+INSERT_PERSON_STATIC_COHORT = """
+INSERT INTO {} (id, person_id, cohort_id, team_id, _timestamp) VALUES 
+""".format(
+    PERSON_STATIC_COHORT_TABLE
+)
+
+#
+# Other queries
+#
+
 GET_DISTINCT_IDS_SQL = """
 SELECT * FROM person_distinct_id WHERE team_id = %(team_id)s
 """
@@ -164,9 +175,34 @@ GET_DISTINCT_IDS_SQL_BY_ID = """
 SELECT * FROM person_distinct_id WHERE team_id = %(team_id)s AND person_id = %(person_id)s
 """
 
+GET_PERSON_IDS_BY_FILTER = """
+SELECT DISTINCT p.id
+FROM ({latest_person_sql}) AS p
+INNER JOIN (
+    SELECT person_id, distinct_id
+    FROM person_distinct_id
+    WHERE team_id = %(team_id)s
+) AS pid ON p.id = pid.person_id
+WHERE team_id = %(team_id)s
+  {distinct_query}
+""".format(
+    latest_person_sql=GET_LATEST_PERSON_SQL, distinct_query="{distinct_query}"
+)
+
 GET_PERSON_BY_DISTINCT_ID = """
-SELECT p.* FROM person as p inner join person_distinct_id as pid on p.id = pid.person_id where team_id = %(team_id)s AND distinct_id = %(distinct_id)s
-"""
+SELECT p.id
+FROM ({latest_person_sql}) AS p
+INNER JOIN (
+    SELECT person_id, distinct_id
+    FROM person_distinct_id
+    WHERE team_id = %(team_id)s
+) AS pid ON p.id = pid.person_id
+WHERE team_id = %(team_id)s
+  AND pid.distinct_id = %(distinct_id)s
+  {distinct_query}
+""".format(
+    latest_person_sql=GET_LATEST_PERSON_SQL, distinct_query="{distinct_query}"
+)
 
 GET_PERSONS_BY_DISTINCT_IDS = """
 SELECT 
@@ -199,12 +235,8 @@ inner join (
 where person_distinct_id.team_id = %(team_id)s
 """
 
-PERSON_EXISTS_SQL = """
-SELECT count(*) FROM person where id = %(id)s
-"""
-
 INSERT_PERSON_SQL = """
-INSERT INTO person SELECT %(id)s, now(), %(team_id)s, %(properties)s, %(is_identified)s, now(), 0
+INSERT INTO person SELECT %(id)s, %(created_at)s, %(team_id)s, %(properties)s, %(is_identified)s, now(), 0
 """
 
 INSERT_PERSON_DISTINCT_ID = """
@@ -223,6 +255,14 @@ DELETE_PERSON_BY_ID = """
 ALTER TABLE person DELETE where id = %(id)s
 """
 
+DELETE_PERSON_EVENTS_BY_ID = """
+ALTER TABLE events DELETE
+where distinct_id IN (
+    SELECT distinct_id FROM person_distinct_id WHERE person_id=%(id)s AND team_id = %(team_id)s
+)
+AND team_id = %(team_id)s
+"""
+
 DELETE_PERSON_DISTINCT_ID_BY_PERSON_ID = """
 ALTER TABLE person_distinct_id DELETE where person_id = %(id)s
 """
@@ -232,65 +272,59 @@ ALTER TABLE person UPDATE is_identified = %(is_identified)s where id = %(id)s
 """
 
 PERSON_TREND_SQL = """
-SELECT DISTINCT distinct_id FROM events WHERE team_id = %(team_id)s {entity_filter} {filters} {parsed_date_from} {parsed_date_to}
+SELECT DISTINCT distinct_id FROM events WHERE team_id = %(team_id)s {entity_filter} {filters} {parsed_date_from} {parsed_date_to} {person_filter}
 """
 
 PEOPLE_THROUGH_DISTINCT_SQL = """
-SELECT id, created_at, team_id, properties, is_identified, groupArray(distinct_id) FROM person INNER JOIN (
-    SELECT DISTINCT person_id, distinct_id FROM person_distinct_id WHERE distinct_id IN ({content_sql})
-) as pdi ON person.id = pdi.person_id GROUP BY id, created_at, team_id, properties, is_identified
+SELECT id, created_at, team_id, properties, is_identified, groupArray(distinct_id) FROM (
+    {latest_person_sql}
+) as person INNER JOIN (
+    SELECT DISTINCT person_id, distinct_id FROM person_distinct_id WHERE distinct_id IN ({content_sql}) AND team_id = %(team_id)s
+) as pdi ON person.id = pdi.person_id
+WHERE team_id = %(team_id)s
+GROUP BY id, created_at, team_id, properties, is_identified
 LIMIT 200 OFFSET %(offset)s
 """
 
-PEOPLE_SQL = """
-SELECT id, created_at, team_id, properties, is_identified, groupArray(distinct_id) FROM person INNER JOIN (
-    SELECT DISTINCT person_id, distinct_id FROM person_distinct_id WHERE person_id IN ({content_sql})
-) as pdi ON person.id = pdi.person_id GROUP BY id, created_at, team_id, properties, is_identified
-LIMIT 200 OFFSET %(offset)s 
+INSERT_COHORT_ALL_PEOPLE_THROUGH_DISTINCT_SQL = """
+INSERT INTO {cohort_table} SELECT generateUUIDv4(), id, %(cohort_id)s, %(team_id)s, %(_timestamp)s, 0 FROM (
+    SELECT id FROM (
+        {latest_person_sql}
+    ) as person INNER JOIN (
+        SELECT DISTINCT person_id, distinct_id FROM person_distinct_id WHERE distinct_id IN ({content_sql}) AND team_id = %(team_id)s
+    ) as pdi ON person.id = pdi.person_id
+    WHERE team_id = %(team_id)s
+    GROUP BY id
+)
 """
 
-PEOPLE_BY_TEAM_SQL = """
-SELECT id, created_at, team_id, properties, is_identified, groupArray(distinct_id) FROM person INNER JOIN (
-    SELECT DISTINCT person_id, distinct_id FROM person_distinct_id WHERE team_id = %(team_id)s
+PEOPLE_SQL = """
+SELECT id, created_at, team_id, properties, is_identified, groupArray(distinct_id) FROM (
+    {latest_person_sql}
+) as person INNER JOIN (
+    SELECT DISTINCT person_id, distinct_id FROM person_distinct_id WHERE person_id IN ({content_sql}) AND team_id = %(team_id)s
 ) as pdi ON person.id = pdi.person_id 
-WHERE team_id = %(team_id)s {filters} 
 GROUP BY id, created_at, team_id, properties, is_identified
 LIMIT 100 OFFSET %(offset)s 
 """
 
-GET_PERSON_TOP_PROPERTIES = """
-SELECT key, count(1) as count FROM (
-    SELECT 
-    array_property_keys as key,
-    array_property_values as value
-    from (
-        SELECT
-            arrayMap(k -> toString(k.1), JSONExtractKeysAndValuesRaw(properties)) AS array_property_keys,
-            arrayMap(k -> toString(k.2), JSONExtractKeysAndValuesRaw(properties)) AS array_property_values
-        FROM person WHERE team_id = %(team_id)s
-    )
-    ARRAY JOIN array_property_keys, array_property_values
-) GROUP BY key ORDER BY count DESC LIMIT %(limit)s
+INSERT_COHORT_ALL_PEOPLE_SQL = """
+INSERT INTO {cohort_table} SELECT generateUUIDv4(), id, %(cohort_id)s, %(team_id)s, %(_timestamp)s, 0 FROM (
+    SELECT id FROM (
+        {latest_person_sql}
+    ) as person INNER JOIN (
+        SELECT DISTINCT person_id, distinct_id FROM person_distinct_id WHERE person_id IN ({content_sql}) AND team_id = %(team_id)s
+    ) as pdi ON person.id = pdi.person_id
+    WHERE team_id = %(team_id)s
+    GROUP BY id
+)
 """
 
-
 GET_DISTINCT_IDS_BY_PROPERTY_SQL = """
-SELECT distinct_id FROM person_distinct_id WHERE person_id {negation}IN 
+SELECT distinct_id FROM person_distinct_id WHERE person_id IN
 (
-    SELECT id FROM (
-        SELECT
-        id, 
-        array_property_keys as key,
-        array_property_values as value
-        from (
-            SELECT
-                id,
-                arrayMap(k -> toString(k.1), JSONExtractKeysAndValuesRaw(properties)) AS array_property_keys,
-                arrayMap(k -> toString(k.2), JSONExtractKeysAndValuesRaw(properties)) AS array_property_values
-            FROM person WHERE team_id = %(team_id)s
-        )
-        ARRAY JOIN array_property_keys, array_property_values
-    ) ep
-    WHERE {filters}
+    SELECT id
+    FROM person
+    WHERE team_id = %(team_id)s {filters}
 ) AND team_id = %(team_id)s
 """

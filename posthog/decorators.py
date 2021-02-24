@@ -1,57 +1,61 @@
-import json
 from datetime import datetime
+from enum import Enum
+from functools import wraps
+from typing import Callable, Dict, List, Union, cast
 
 from django.core.cache import cache
+from django.http.request import HttpRequest
+from django.utils.timezone import now
 
-from posthog.models import DashboardItem, Filter
+from posthog.models import Filter, Team, User
+from posthog.models.dashboard_item import DashboardItem
+from posthog.models.filters.utils import get_filter
+from posthog.settings import TEMP_CACHE_RESULTS_TTL
 from posthog.utils import generate_cache_key
 
-from .utils import generate_cache_key
-
-TRENDS_ENDPOINT = "Trends"
-FUNNEL_ENDPOINT = "Funnel"
+from .utils import generate_cache_key, get_safe_cache
 
 
-def cached_function(cache_type: str, expiry=30):
-    def inner_decorator(f):
-        def wrapper(*args, **kw):
-            from posthog.celery import update_cache_item_task
+class CacheType(str, Enum):
+    TRENDS = "Trends"
+    FUNNEL = "Funnel"
+    RETENTION = "Retention"
+    SESSION = "Session"
+    STICKINESS = "Stickiness"
+    PATHS = "Path"
 
-            cache_key = ""
 
+def cached_function():
+    def parameterized_decorator(f: Callable):
+        @wraps(f)
+        def wrapper(*args, **kwargs) -> Dict[str, Union[List, datetime, bool]]:
             # prepare caching params
-            request = args[1]
-            team = request.user.team
-            payload = None
-            dashboard_item_id = None
-            refresh = request.GET.get("refresh", None)
+            request: HttpRequest = args[1]
+            team = cast(User, request.user).team
+            filter = None
+            if not team:
+                return f(*args, **kwargs)
 
-            if cache_type == TRENDS_ENDPOINT:
-                filter = Filter(request=request)
-                cache_key = generate_cache_key(filter.toJSON() + "_" + str(team.pk))
-                payload = {"filter": filter.toJSON(), "team_id": team.pk}
-            elif cache_type == FUNNEL_ENDPOINT:
-                pk = args[2]
-                cache_key = generate_cache_key("funnel_{}_{}".format(pk, team.pk))
-                payload = {"funnel_id": pk, "team_id": team.pk}
+            filter = get_filter(request=request, team=team)
+            cache_key = generate_cache_key("{}_{}".format(filter.toJSON(), team.pk))
+            # return cached result if possible
+            if not request.GET.get("refresh", False):
+                cached_result = get_safe_cache(cache_key)
+                if cached_result and cached_result.get("result"):
+                    return {**cached_result, "is_cached": True}
+            # call function being wrapped
+            result = f(*args, **kwargs)
 
-            if not refresh:
-                # return result if cached
-                cached_result = cache.get(cache_key)
-                if cached_result:
-                    return cached_result["result"]
-
-            # call wrapped function
-            result = f(*args, **kw)
-
-            # cache new data using
-            if result and payload:
+            # cache new data
+            if result is not None and not (isinstance(result.get("result"), dict) and result["result"].get("loading")):
                 cache.set(
-                    cache_key, {"result": result, "details": payload, "type": cache_type,}, expiry,
+                    cache_key, {"result": result["result"], "last_refresh": now()}, TEMP_CACHE_RESULTS_TTL,
                 )
-
+                if filter:
+                    dashboard_items = DashboardItem.objects.filter(team_id=team.pk, filters_hash=cache_key)
+                    dashboard_items.update(last_refresh=now())
             return result
 
         return wrapper
 
-    return inner_decorator
+    return parameterized_decorator

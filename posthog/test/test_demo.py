@@ -1,33 +1,23 @@
-from django.test import Client, TestCase
+import random
 
-from posthog.api.test.base import BaseTest
-from posthog.models import Action, DashboardItem, Event, Funnel, Person, Team, User
+from posthog.models import Action, Event, Person, SessionRecordingEvent, Team
+from posthog.test.base import BaseTest
 
 
 class TestDemo(BaseTest):
     TESTS_API = True
 
     def test_create_demo_data(self):
-        self.client.get("/demo")
-        self.assertEqual(Event.objects.count(), 192)
-        self.assertEqual(Person.objects.count(), 100)
-        self.assertEqual(Action.objects.count(), 3)
+        random.seed(900)
 
-        self.assertEqual(Action.objects.all()[1].events.count(), 9)
-        self.assertIn("$pageview", Team.objects.get().event_names)
-
-    def test_do_not_create_demo_data_if_already_exists(self):
-        Event.objects.create(team=self.team, event="random event")
         self.client.get("/demo")
-        self.assertEqual(Event.objects.count(), 1)
+        demo_team = Team.objects.get(name__icontains="demo")
+        self.assertGreaterEqual(Event.objects.count(), 900)
+        self.assertGreaterEqual(Person.objects.count(), 160)
+        self.assertGreaterEqual(Action.objects.count(), 8)
+        self.assertGreaterEqual(SessionRecordingEvent.objects.count(), 60)
 
-    def test_delete_demo_data(self):
-        self.client.get("/demo")
-        self.assertEqual(Event.objects.count(), 192)
-        Person.objects.create(team=self.team, distinct_ids=["random_real_person"])
-        response = self.client.delete("/delete_demo_data/").json()
-        self.assertEqual(response["status"], "ok")
-        self.assertEqual(Event.objects.count(), 0)
-        self.assertEqual(Person.objects.count(), 1)
-        self.assertEqual(Funnel.objects.count(), 0)
-        self.assertEqual(Action.objects.count(), 0)
+        action_event_counts = [action.events.count() for action in Action.objects.all()]
+        self.assertCountEqual(action_event_counts, [14, 140, 0, 0, 40, 100, 73, 87])
+
+        self.assertIn("$pageview", demo_team.event_names)

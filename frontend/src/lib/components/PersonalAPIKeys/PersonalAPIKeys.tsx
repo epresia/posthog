@@ -23,7 +23,9 @@ function CreateKeyModal({
     const closeModal: () => void = useCallback(() => {
         setErrorMessage(null)
         setIsVisible(false)
-        if (inputRef.current) inputRef.current.state.value = ''
+        if (inputRef.current) {
+            inputRef.current.setValue('')
+        }
     }, [inputRef, setIsVisible])
 
     return (
@@ -35,7 +37,7 @@ function CreateKeyModal({
                 const label = inputRef.current?.state.value?.trim()
                 if (label) {
                     setErrorMessage(null)
-                    createKey(inputRef.current?.state.value.trim())
+                    createKey(label)
                     closeModal()
                 } else {
                     setErrorMessage('Your key needs a label!')
@@ -110,7 +112,7 @@ function PersonalAPIKeysTable(): JSX.Element {
             title: 'Last Used',
             dataIndex: 'last_used_at',
             key: 'lastUsedAt',
-            render: (lastUsedAt: string) => (lastUsedAt ? humanFriendlyDetailedTime(lastUsedAt) : 'never'),
+            render: (lastUsedAt: string | null) => humanFriendlyDetailedTime(lastUsedAt),
         },
         {
             title: 'Created',
@@ -150,7 +152,7 @@ export function PersonalAPIKeys(): JSX.Element {
                 Try not to keep disused keys around. If you have any suspicion that one of these may be compromised,
                 delete it and use a new one.
                 <br />
-                <a href="https://posthog.com/docs/api/api#authentication">
+                <a href="https://posthog.com/docs/api/overview#authentication">
                     More about API authentication in PostHog Docs.
                 </a>
             </p>

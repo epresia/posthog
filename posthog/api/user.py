@@ -1,98 +1,170 @@
-import functools
 import json
 import os
 import secrets
 import urllib.parse
+from typing import Optional, cast
 
-import posthoganalytics
 import requests
 from django.conf import settings
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from django.views.decorators.http import require_http_methods
-from rest_framework import exceptions, serializers
+from loginas.utils import is_impersonated_session
+from rest_framework import serializers
 
 from posthog.auth import authenticate_secondarily
-from posthog.models import Event, User
+from posthog.ee import is_ee_enabled
+from posthog.email import is_email_available
+from posthog.models import Team, User
+from posthog.models.organization import Organization
+from posthog.plugins import can_configure_plugins_via_api, can_install_plugins_via_api, reload_plugins_on_workers
+from posthog.tasks import user_identify
 from posthog.version import VERSION
+
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "distinct_id", "first_name", "email"]
+
+
+def get_event_names_with_usage(team: Team):
+    def get_key(event: str, type: str):
+        return next((item.get(type) for item in team.event_names_with_usage if item["event"] == event), None)
+
+    return [
+        {"event": event, "volume": get_key(event, "volume"), "usage_count": get_key(event, "usage_count"),}
+        for event in team.event_names
+    ]
+
+
+def get_event_properties_with_usage(team: Team):
+    def get_key(key: str, type: str):
+        return next((item.get(type) for item in team.event_properties_with_usage if item["key"] == key), None)
+
+    return [
+        {"key": key, "volume": get_key(key, "volume"), "usage_count": get_key(key, "usage_count"),}
+        for key in team.event_properties
+    ]
 
 
 # TODO: remake these endpoints with DRF!
 @authenticate_secondarily
 def user(request):
-    team = request.user.team
+    organization: Optional[Organization] = request.user.organization
+    organizations = list(request.user.organizations.order_by("-created_at").values("name", "id"))
+    team: Optional[Team] = request.user.team
+    teams = list(request.user.teams.order_by("-created_at").values("name", "id"))
+    user = cast(User, request.user)
 
     if request.method == "PATCH":
         data = json.loads(request.body)
 
-        if "team" in data:
+        if team is not None and "team" in data:
             team.app_urls = data["team"].get("app_urls", team.app_urls)
-            team.opt_out_capture = data["team"].get("opt_out_capture", team.opt_out_capture)
             team.slack_incoming_webhook = data["team"].get("slack_incoming_webhook", team.slack_incoming_webhook)
             team.anonymize_ips = data["team"].get("anonymize_ips", team.anonymize_ips)
             team.session_recording_opt_in = data["team"].get("session_recording_opt_in", team.session_recording_opt_in)
+            team.session_recording_retention_period_days = data["team"].get(
+                "session_recording_retention_period_days", team.session_recording_retention_period_days
+            )
+            if data["team"].get("plugins_opt_in") is not None:
+                reload_plugins_on_workers()
+            team.plugins_opt_in = data["team"].get("plugins_opt_in", team.plugins_opt_in)
             team.completed_snippet_onboarding = data["team"].get(
                 "completed_snippet_onboarding", team.completed_snippet_onboarding,
             )
-            # regenerate or disable team signup link
-            signup_state = data["team"].get("signup_state")
-            if signup_state == True:
-                team.signup_token = secrets.token_urlsafe(22)
-            elif signup_state == False:
-                team.signup_token = None
             team.save()
 
         if "user" in data:
-            request.user.email_opt_in = data["user"].get("email_opt_in", request.user.email_opt_in)
-            request.user.anonymize_data = data["user"].get("anonymize_data", request.user.anonymize_data)
-            request.user.toolbar_mode = data["user"].get("toolbar_mode", request.user.toolbar_mode)
-            posthoganalytics.identify(
-                request.user.distinct_id,
-                {
-                    "email_opt_in": request.user.email_opt_in,
-                    "anonymize_data": request.user.anonymize_data,
-                    "email": request.user.email if not request.user.anonymize_data else None,
-                    "is_signed_up": True,
-                    "toolbar_mode": request.user.toolbar_mode,
-                    "billing_plan": request.user.billing_plan,
-                    "is_team_unique_user": (team.users.count() == 1),
-                    "team_setup_complete": (team.completed_snippet_onboarding and team.ingested_event),
-                },
-            )
-            request.user.save()
+            try:
+                user.current_organization = user.organizations.get(id=data["user"]["current_organization_id"])
+                assert user.organization is not None, "Organization should have been just set"
+                user.current_team = user.organization.teams.first()
+            except (KeyError, ValueError):
+                pass
+            except ObjectDoesNotExist:
+                return JsonResponse({"detail": "Organization not found for user."}, status=404)
+            except KeyError:
+                pass
+            except ObjectDoesNotExist:
+                return JsonResponse({"detail": "Organization not found for user."}, status=404)
+            if user.organization is not None:
+                try:
+                    user.current_team = user.organization.teams.get(id=int(data["user"]["current_team_id"]))
+                except (KeyError, TypeError):
+                    pass
+                except ValueError:
+                    return JsonResponse({"detail": "Team ID must be an integer."}, status=400)
+                except ObjectDoesNotExist:
+                    return JsonResponse({"detail": "Team not found for user's current organization."}, status=404)
+            user.email_opt_in = data["user"].get("email_opt_in", user.email_opt_in)
+            user.anonymize_data = data["user"].get("anonymize_data", user.anonymize_data)
+            user.toolbar_mode = data["user"].get("toolbar_mode", user.toolbar_mode)
+            user.save()
+
+    user_identify.identify_task.delay(user_id=user.id)
 
     return JsonResponse(
         {
-            "id": request.user.pk,
-            "distinct_id": request.user.distinct_id,
-            "name": request.user.first_name,
-            "email": request.user.email,
-            "has_events": Event.objects.filter(team=team).exists(),
-            "email_opt_in": request.user.email_opt_in,
-            "anonymize_data": request.user.anonymize_data,
-            "toolbar_mode": request.user.toolbar_mode,
-            "team": {
+            "id": user.pk,
+            "distinct_id": user.distinct_id,
+            "name": user.first_name,
+            "email": user.email,
+            "email_opt_in": user.email_opt_in,
+            "anonymize_data": user.anonymize_data,
+            "toolbar_mode": user.toolbar_mode,
+            "organization": None
+            if organization is None
+            else {
+                "id": organization.id,
+                "name": organization.name,
+                "billing_plan": organization.billing_plan,
+                "available_features": organization.available_features,
+                "created_at": organization.created_at,
+                "updated_at": organization.updated_at,
+                "teams": [{"id": team.id, "name": team.name} for team in organization.teams.all().only("id", "name")],
+            },
+            "organizations": organizations,
+            "team": None
+            if team is None
+            else {
+                "id": team.id,
+                "name": team.name,
                 "app_urls": team.app_urls,
                 "api_token": team.api_token,
-                "signup_token": team.signup_token,
-                "opt_out_capture": team.opt_out_capture,
                 "anonymize_ips": team.anonymize_ips,
                 "slack_incoming_webhook": team.slack_incoming_webhook,
                 "event_names": team.event_names,
+                "event_names_with_usage": get_event_names_with_usage(team),
                 "event_properties": team.event_properties,
                 "event_properties_numerical": team.event_properties_numerical,
+                "event_properties_with_usage": get_event_properties_with_usage(team),
                 "completed_snippet_onboarding": team.completed_snippet_onboarding,
                 "session_recording_opt_in": team.session_recording_opt_in,
+                "session_recording_retention_period_days": team.session_recording_retention_period_days,
+                "plugins_opt_in": team.plugins_opt_in,
+                "ingested_event": team.ingested_event,
+                "is_demo": team.is_demo,
             },
+            "teams": teams,
+            "has_password": user.has_usable_password(),
             "opt_out_capture": os.environ.get("OPT_OUT_CAPTURE"),
             "posthog_version": VERSION,
-            "available_features": request.user.available_features,
-            "billing_plan": request.user.billing_plan,
             "is_multi_tenancy": getattr(settings, "MULTI_TENANCY", False),
-            "ee_available": request.user.ee_available,
+            "ee_available": settings.EE_AVAILABLE,
+            "ee_enabled": is_ee_enabled(),
+            "email_service_available": is_email_available(with_absolute_urls=True),
+            "is_debug": getattr(settings, "DEBUG", False),
+            "is_staff": user.is_staff,
+            "is_impersonated": is_impersonated_session(request),
+            "plugin_access": {
+                "install": can_install_plugins_via_api(user.organization),
+                "configure": can_configure_plugins_via_api(user.organization),
+            },
         }
     )
 
@@ -142,23 +214,26 @@ def change_password(request):
     except (TypeError, json.decoder.JSONDecodeError):
         return JsonResponse({"error": "Cannot parse request body"}, status=400)
 
-    old_password = body.get("oldPassword")
+    old_password = body.get("currentPassword")
     new_password = body.get("newPassword")
 
-    if not old_password or not new_password:
-        return JsonResponse({"error": "Missing payload"}, status=400)
+    user = cast(User, request.user)
 
-    if not request.user.check_password(old_password):
-        return JsonResponse({"error": "Incorrect old password"}, status=400)
+    if user.has_usable_password():
+        if not old_password or not new_password:
+            return JsonResponse({"error": "Missing payload"}, status=400)
+
+        if not user.check_password(old_password):
+            return JsonResponse({"error": "Incorrect old password"}, status=400)
 
     try:
-        validate_password(new_password, request.user)
+        validate_password(new_password, user)
     except ValidationError as err:
         return JsonResponse({"error": err.messages[0]}, status=400)
 
-    request.user.set_password(new_password)
-    request.user.save()
-    update_session_auth_hash(request, request.user)
+    user.set_password(new_password)
+    user.save()
+    update_session_auth_hash(request, user)
 
     return JsonResponse({})
 
@@ -166,7 +241,7 @@ def change_password(request):
 @require_http_methods(["POST"])
 @authenticate_secondarily
 def test_slack_webhook(request):
-    """Change the password of a regular User."""
+    """Test webhook."""
     try:
         body = json.loads(request.body)
     except (TypeError, json.decoder.JSONDecodeError):
@@ -176,7 +251,7 @@ def test_slack_webhook(request):
 
     if not webhook:
         return JsonResponse({"error": "no webhook URL"})
-    message = {"text": "Greetings from PostHog!"}
+    message = {"text": "_Greetings_ from PostHog!"}
     try:
         response = requests.post(webhook, verify=False, json=message)
 
@@ -186,9 +261,3 @@ def test_slack_webhook(request):
             return JsonResponse({"error": response.text})
     except:
         return JsonResponse({"error": "invalid webhook URL"})
-
-
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ["id", "distinct_id", "first_name", "email"]

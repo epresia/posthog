@@ -1,140 +1,147 @@
-import copy
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple
 
+from django.conf import settings
+from django.db.models.expressions import F
 from django.utils import timezone
+from rest_framework.utils.serializer_helpers import ReturnDict
+from sentry_sdk.api import capture_exception
 
 from ee.clickhouse.client import sync_execute
 from ee.clickhouse.models.action import format_action_filter
+from ee.clickhouse.models.person import ClickhousePersonSerializer
 from ee.clickhouse.models.property import parse_prop_clauses
-from ee.clickhouse.queries.util import parse_timestamps
+from ee.clickhouse.queries.util import get_trunc_func_ch, parse_timestamps
+from ee.clickhouse.sql.person import (
+    GET_LATEST_PERSON_SQL,
+    INSERT_COHORT_ALL_PEOPLE_SQL,
+    PEOPLE_SQL,
+    PERSON_STATIC_COHORT_TABLE,
+)
+from ee.clickhouse.sql.stickiness.stickiness import STICKINESS_SQL
+from ee.clickhouse.sql.stickiness.stickiness_actions import STICKINESS_ACTIONS_SQL
+from ee.clickhouse.sql.stickiness.stickiness_people import STICKINESS_PEOPLE_SQL
 from posthog.constants import TREND_FILTER_TYPE_ACTIONS
 from posthog.models.action import Action
+from posthog.models.cohort import Cohort
 from posthog.models.entity import Entity
-from posthog.models.filter import Filter
+from posthog.models.filters.stickiness_filter import StickinessFilter
 from posthog.models.team import Team
-from posthog.queries.base import BaseQuery, determine_compared_filter
-from posthog.utils import relative_date_parse
-
-STICKINESS_SQL = """
-    SELECT countDistinct(person_id), day_count FROM (
-         SELECT person_distinct_id.person_id, countDistinct(toDate(timestamp)) as day_count
-         FROM events
-         LEFT JOIN person_distinct_id ON person_distinct_id.distinct_id = events.distinct_id
-         WHERE team_id = {team_id} AND event = '{event}' {filters} {parsed_date_from} {parsed_date_to}
-         GROUP BY person_distinct_id.person_id
-    ) GROUP BY day_count ORDER BY day_count
-"""
-
-STICKINESS_ACTIONS_SQL = """
-    SELECT countDistinct(person_id), day_count FROM (
-         SELECT person_distinct_id.person_id, countDistinct(toDate(timestamp)) as day_count
-         FROM events
-         LEFT JOIN person_distinct_id ON person_distinct_id.distinct_id = events.distinct_id
-         WHERE team_id = {team_id} AND uuid IN ({actions_query}) {filters} {parsed_date_from} {parsed_date_to}
-         GROUP BY person_distinct_id.person_id
-    ) GROUP BY day_count ORDER BY day_count
-"""
-
-STICKINESS_PEOPLE_SQL = """
-SELECT DISTINCT pid FROM (
-    SELECT DISTINCT person_distinct_id.person_id as pid, countDistinct(toDate(timestamp)) as day_count
-    FROM events
-    LEFT JOIN person_distinct_id ON person_distinct_id.distinct_id = events.distinct_id
-    WHERE team_id = %(team_id)s {entity_filter} {filters} {parsed_date_from} {parsed_date_to}
-    GROUP BY person_distinct_id.person_id
-) WHERE day_count = %(stickiness_day)s
-"""
+from posthog.queries.stickiness import Stickiness
 
 
-class ClickhouseStickiness(BaseQuery):
-    def _serialize_entity(self, entity: Entity, filter: Filter, team: Team) -> List[Dict[str, Any]]:
-        serialized: Dict[str, Any] = {
-            "action": entity.to_dict(),
-            "label": entity.name,
-            "count": 0,
-            "data": [],
-            "labels": [],
-            "days": [],
-        }
+class ClickhouseStickiness(Stickiness):
+    def stickiness(self, entity: Entity, filter: StickinessFilter, team_id: int) -> Dict[str, Any]:
 
-        result = self._format_stickiness_query(entity, filter, team)
+        parsed_date_from, parsed_date_to, _ = parse_timestamps(filter=filter, team_id=team_id)
+        prop_filters, prop_filter_params = parse_prop_clauses(filter.properties, team_id)
+        trunc_func = get_trunc_func_ch(filter.interval)
 
-        if result:
-            new_dict = copy.deepcopy(serialized)
-            new_dict.update(result)
-            return [new_dict]
-
-        return [serialized]
-
-    def _format_stickiness_query(self, entity: Entity, filter: Filter, team: Team) -> Optional[Dict[str, Any]]:
-        if not filter.date_to or not filter.date_from:
-            raise ValueError("_stickiness needs date_to and date_from set")
-        range_days = (filter.date_to - filter.date_from).days + 2
-
-        parsed_date_from, parsed_date_to = parse_timestamps(filter=filter)
-        prop_filters, prop_filter_params = parse_prop_clauses("uuid", filter.properties, team)
-
-        params: Dict = {"team_id": team.pk}
-        params = {**params, **prop_filter_params}
+        params: Dict = {"team_id": team_id}
+        params = {**params, **prop_filter_params, "num_intervals": filter.total_intervals}
         if entity.type == TREND_FILTER_TYPE_ACTIONS:
             action = Action.objects.get(pk=entity.id)
             action_query, action_params = format_action_filter(action)
             if action_query == "":
-                return None
+                return {}
 
             params = {**params, **action_params}
             content_sql = STICKINESS_ACTIONS_SQL.format(
-                team_id=team.pk,
+                team_id=team_id,
                 actions_query=action_query,
-                parsed_date_from=(parsed_date_from or ""),
-                parsed_date_to=(parsed_date_to or ""),
-                filters="AND uuid IN {filters}".format(filters=prop_filters) if filter.properties else "",
+                parsed_date_from=parsed_date_from,
+                parsed_date_to=parsed_date_to,
+                filters=prop_filters,
+                trunc_func=trunc_func,
             )
         else:
             content_sql = STICKINESS_SQL.format(
-                team_id=team.pk,
+                team_id=team_id,
                 event=entity.id,
-                parsed_date_from=(parsed_date_from or ""),
-                parsed_date_to=(parsed_date_to or ""),
-                filters="AND uuid IN {filters}".format(filters=prop_filters) if filter.properties else "",
+                parsed_date_from=parsed_date_from,
+                parsed_date_to=parsed_date_to,
+                filters=prop_filters,
+                trunc_func=trunc_func,
             )
 
-        aggregated_counts = sync_execute(content_sql, params)
+        counts = sync_execute(content_sql, params)
+        return self.process_result(counts, filter)
 
-        response: Dict[int, int] = {}
-        for result in aggregated_counts:
-            response[result[1]] = result[0]
+    def _retrieve_people(self, target_entity: Entity, filter: StickinessFilter, team: Team) -> ReturnDict:
+        return retrieve_stickiness_people(target_entity, filter, team)
 
-        labels = []
-        data = []
 
-        for day in range(1, range_days):
-            label = "{} day{}".format(day, "s" if day > 1 else "")
-            labels.append(label)
-            data.append(response[day] if day in response else 0)
+def _format_entity_filter(entity: Entity) -> Tuple[str, Dict]:
+    if entity.type == TREND_FILTER_TYPE_ACTIONS:
+        try:
+            action = Action.objects.get(pk=entity.id)
+            action_query, params = format_action_filter(action)
+            entity_filter = "AND {}".format(action_query)
 
-        return {
-            "labels": labels,
-            "days": [day for day in range(1, range_days)],
-            "data": data,
-            "count": sum(data),
-        }
+        except Action.DoesNotExist:
+            raise ValueError("This action does not exist")
+    else:
+        entity_filter = "AND event = %(event)s"
+        params = {"event": entity.id}
 
-    def _calculate_stickiness(self, filter: Filter, team: Team) -> List[Dict[str, Any]]:
-        if not filter._date_from:
-            filter._date_from = relative_date_parse("-7d")
-        if not filter._date_to:
-            filter._date_to = timezone.now()
+    return entity_filter, params
 
-        result = []
 
-        for entity in filter.entities:
-            if entity.type == TREND_FILTER_TYPE_ACTIONS:
-                entity.name = Action.objects.only("name").get(team=team, pk=entity.id).name
-            entity_result = self._serialize_entity(entity, filter, team)
-            result.extend(entity_result)
+def _process_content_sql(target_entity: Entity, filter: StickinessFilter, team: Team) -> Tuple[str, Dict[str, Any]]:
+    parsed_date_from, parsed_date_to, _ = parse_timestamps(filter=filter, team_id=team.pk)
+    prop_filters, prop_filter_params = parse_prop_clauses(filter.properties, team.pk)
+    entity_sql, entity_params = _format_entity_filter(entity=target_entity)
+    trunc_func = get_trunc_func_ch(filter.interval)
 
-        return result
+    params: Dict = {
+        "team_id": team.pk,
+        **prop_filter_params,
+        "stickiness_day": filter.selected_interval,
+        **entity_params,
+        "offset": filter.offset,
+    }
 
-    def run(self, filter: Filter, team: Team, *args, **kwargs) -> List[Dict[str, Any]]:
-        return self._calculate_stickiness(filter, team)
+    content_sql = STICKINESS_PEOPLE_SQL.format(
+        entity_filter=entity_sql,
+        parsed_date_from=parsed_date_from,
+        parsed_date_to=parsed_date_to,
+        filters=prop_filters,
+        trunc_func=trunc_func,
+    )
+    return content_sql, params
+
+
+def retrieve_stickiness_people(target_entity: Entity, filter: StickinessFilter, team: Team) -> ReturnDict:
+
+    content_sql, params = _process_content_sql(target_entity, filter, team)
+
+    people = sync_execute(
+        PEOPLE_SQL.format(content_sql=content_sql, query="", latest_person_sql=GET_LATEST_PERSON_SQL.format(query="")),
+        params,
+    )
+    return ClickhousePersonSerializer(people, many=True).data
+
+
+def insert_stickiness_people_into_cohort(cohort: Cohort, target_entity: Entity, filter: StickinessFilter) -> None:
+    content_sql, params = _process_content_sql(target_entity, filter, cohort.team)
+    try:
+        sync_execute(
+            INSERT_COHORT_ALL_PEOPLE_SQL.format(
+                content_sql=content_sql,
+                query="",
+                latest_person_sql=GET_LATEST_PERSON_SQL.format(query=""),
+                cohort_table=PERSON_STATIC_COHORT_TABLE,
+            ),
+            {"cohort_id": cohort.pk, "_timestamp": datetime.now(), **params},
+        )
+        cohort.is_calculating = False
+        cohort.last_calculation = timezone.now()
+        cohort.errors_calculating = 0
+        cohort.save()
+    except Exception as err:
+        if settings.DEBUG:
+            raise err
+        cohort.is_calculating = False
+        cohort.errors_calculating = F("errors_calculating") + 1
+        cohort.save()
+        capture_exception(err)

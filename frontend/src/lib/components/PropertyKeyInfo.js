@@ -114,6 +114,24 @@ export const keyMapping = {
             description: 'Keys of the feature flags that were active while this event was sent.',
             examples: ['beta-feature'],
         },
+        $feature_flag_response: {
+            label: 'Feature Flag Response',
+            description: 'What the call to feature flag responded with.',
+            examples: ['true', 'false'],
+        },
+        $feature_flag: {
+            label: 'Feature Flag',
+            description: (
+                <>
+                    The feature flag that was called.
+                    <br />
+                    <br />
+                    Warning! This only works in combination with the $feature_flag_called event. If you want to filter
+                    other events, try "Active Feature Flags".
+                </>
+            ),
+            examples: ['beta-feature'],
+        },
         $device: {
             label: 'Device',
             description: 'The mobile device that was used.',
@@ -123,12 +141,6 @@ export const keyMapping = {
             label: 'Sentry URL',
             description: 'Direct link to the exception in Sentry',
             examples: ['https://sentry.io/...'],
-        },
-        // Events we hide entirely from the list
-        $snapshot_data: {
-            label: 'Snapshot data',
-            description: 'JSON object used for session recordings.',
-            hide: true,
         },
         $had_persisted_distinct_id: {
             label: '$had_persisted_distinct_id',
@@ -239,10 +251,15 @@ export const keyMapping = {
 
 export function PropertyKeyInfo({ value, type = 'event' }) {
     let data
-    if (type === 'cohort') return value.name
-    else data = keyMapping[type][value]
+    if (type === 'cohort') {
+        return value.name
+    } else {
+        data = keyMapping[type][value]
+    }
 
-    if (!data) return value
+    if (!data) {
+        return value
+    }
 
     return (
         <Popover
@@ -259,6 +276,8 @@ export function PropertyKeyInfo({ value, type = 'event' }) {
                     {data.examples ? (
                         <>
                             <span>{data.description}</span>
+                            <br />
+                            <br />
                             <span>
                                 <i>Example: </i>
                                 {data.examples.join(', ')}

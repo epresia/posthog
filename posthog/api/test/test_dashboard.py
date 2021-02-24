@@ -1,17 +1,23 @@
 import json
 
-from django.core.cache import cache
+from django.utils import timezone
 from django.utils.timezone import now
 from freezegun import freeze_time
 
-from posthog.decorators import TRENDS_ENDPOINT
 from posthog.models import Dashboard, DashboardItem, Filter, User
-
-from .base import BaseTest, TransactionBaseTest
+from posthog.test.base import TransactionBaseTest
+from posthog.utils import generate_cache_key
 
 
 class TestDashboard(TransactionBaseTest):
     TESTS_API = True
+
+    def test_get_dashboard(self):
+        dashboard = Dashboard.objects.create(team=self.team, name="private dashboard", created_by=self.user)
+        response = self.client.get(f"/api/dashboard/{dashboard.id}", content_type="application/json",)
+        self.assertEqual(response.json()["name"], "private dashboard")
+        self.assertEqual(response.json()["created_by"]["distinct_id"], self.user.distinct_id)
+        self.assertEqual(response.json()["created_by"]["first_name"], self.user.first_name)
 
     def test_create_dashboard_item(self):
         dashboard = Dashboard.objects.create(team=self.team, share_token="testtoken", name="public dashboard")
@@ -30,9 +36,9 @@ class TestDashboard(TransactionBaseTest):
     def test_token_auth(self):
         self.client.logout()
         dashboard = Dashboard.objects.create(team=self.team, share_token="testtoken", name="public dashboard")
-        test_no_token = self.client.get("/api/dashboard/%s/" % (dashboard.pk))
+        test_no_token = self.client.get(f"/api/dashboard/{dashboard.pk}/")
         self.assertEqual(test_no_token.status_code, 403)
-        response = self.client.get("/api/dashboard/%s/?share_token=testtoken" % (dashboard.pk))
+        response = self.client.get(f"/api/dashboard/{dashboard.pk}/?share_token=testtoken")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["name"], "public dashboard")
 
@@ -54,35 +60,64 @@ class TestDashboard(TransactionBaseTest):
         dashboard = Dashboard.objects.get(pk=dashboard.pk)
         self.assertIsNotNone(dashboard.share_token)
 
-    def test_return_results(self):
+    def test_no_team_dashboards_list(self):
+        self.team.delete()
+
+        response = self.client.get("/api/dashboard/")
+        self.assertDictEqual(
+            response.json(), {"attr": None, "code": "not_found", "detail": "Not found.", "type": "invalid_request",},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_return_cached_results(self):
+        dashboard = Dashboard.objects.create(team=self.team, name="dashboard")
+        filter_dict = {
+            "events": [{"id": "$pageview"}],
+            "properties": [{"key": "$browser", "value": "Mac OS X"}],
+        }
+        filter = Filter(data=filter_dict)
+
+        item = DashboardItem.objects.create(dashboard=dashboard, filters=filter_dict, team=self.team,)
+        DashboardItem.objects.create(
+            dashboard=dashboard, filters=filter.to_dict(), team=self.team,
+        )
+        response = self.client.get("/api/dashboard/%s/" % dashboard.pk).json()
+        self.assertEqual(response["items"][0]["result"], None)
+
+        # cache results
+        response = self.client.get(
+            "/api/insight/trend/?events=%s&properties=%s"
+            % (json.dumps(filter_dict["events"]), json.dumps(filter_dict["properties"]))
+        )
+        self.assertEqual(response.status_code, 200)
+        item = DashboardItem.objects.get(pk=item.pk)
+        self.assertAlmostEqual(item.last_refresh, now(), delta=timezone.timedelta(seconds=5))
+        self.assertEqual(item.filters_hash, generate_cache_key("{}_{}".format(filter.toJSON(), self.team.pk)))
+
+        with self.assertNumQueries(10):
+            response = self.client.get("/api/dashboard/%s/" % dashboard.pk).json()
+
+        self.assertAlmostEqual(Dashboard.objects.get().last_accessed_at, now(), delta=timezone.timedelta(seconds=5))
+        self.assertEqual(response["items"][0]["result"][0]["count"], 0)
+
+    def test_no_cache_available(self):
         dashboard = Dashboard.objects.create(team=self.team, name="dashboard")
         filter_dict = {
             "events": [{"id": "$pageview"}],
             "properties": [{"key": "$browser", "value": "Mac OS X"}],
         }
 
-        item = DashboardItem.objects.create(
-            dashboard=dashboard, filters=Filter(data=filter_dict).to_dict(), team=self.team,
-        )
-        DashboardItem.objects.create(
-            dashboard=dashboard, filters=Filter(data=filter_dict).to_dict(), team=self.team,
-        )
-        response = self.client.get("/api/dashboard/%s/" % dashboard.pk).json()
+        with freeze_time("2020-01-04T13:00:01Z"):
+            # Pretend we cached something a while ago, but we won't have anything in the redis cache
+            item = DashboardItem.objects.create(
+                dashboard=dashboard, filters=Filter(data=filter_dict).to_dict(), team=self.team, last_refresh=now()
+            )
+
+        with freeze_time("2020-01-20T13:00:01Z"):
+            response = self.client.get("/api/dashboard/%s/" % dashboard.pk).json()
+
         self.assertEqual(response["items"][0]["result"], None)
-        # cache results
-        self.client.get(
-            "/api/action/trends/?events=%s&properties=%s"
-            % (json.dumps(filter_dict["events"]), json.dumps(filter_dict["properties"]))
-        )
-
-        with self.assertNumQueries(7):
-            with freeze_time("2020-01-04T13:00:01Z"):
-                response = self.client.get("/api/dashboard/%s/" % dashboard.pk).json()
-
-        self.assertEqual(
-            Dashboard.objects.get().last_accessed_at.isoformat(), "2020-01-04T13:00:01+00:00",
-        )
-        self.assertEqual(response["items"][0]["result"][0]["count"], 0)
+        self.assertEqual(response["items"][0]["last_refresh"], None)
 
     def test_dashboard(self):
         # create
@@ -105,15 +140,16 @@ class TestDashboard(TransactionBaseTest):
         self.assertEqual(len(response["results"]), 0)
 
     def test_dashboard_items(self):
-        dashboard = Dashboard.objects.create(name="Default", pinned=True, team=self.team)
-        dashboard_item = self.client.post(
+        dashboard = Dashboard.objects.create(name="Default", pinned=True, team=self.team, filters={"date_from": "-14d"})
+        self.client.post(
             "/api/dashboard_item/",
-            data={"filters": {"hello": "test"}, "dashboard": dashboard.pk, "name": "some_item",},
+            data={"filters": {"hello": "test", "date_from": "-7d"}, "dashboard": dashboard.pk, "name": "some_item"},
             content_type="application/json",
         )
         response = self.client.get("/api/dashboard/{}/".format(dashboard.pk)).json()
         self.assertEqual(len(response["items"]), 1)
         self.assertEqual(response["items"][0]["name"], "some_item")
+        self.assertEqual(response["items"][0]["filters"]["date_from"], "-14d")
 
         item_response = self.client.get("/api/dashboard_item/").json()
         self.assertEqual(item_response["results"][0]["name"], "some_item")
@@ -128,7 +164,7 @@ class TestDashboard(TransactionBaseTest):
         self.assertEqual(len(items_response["results"]), 0)
 
     def test_dashboard_items_history_per_user(self):
-        test_user = User.objects.create_and_join(self.organization, self.team, "test@test.com", None)
+        test_user = User.objects.create_and_join(self.organization, "test@test.com", None)
 
         item = DashboardItem.objects.create(filters={"hello": "test"}, team=self.team, created_by=test_user)
 
@@ -180,3 +216,10 @@ class TestDashboard(TransactionBaseTest):
         )
         items_response = self.client.get("/api/dashboard_item/{}/".format(response["id"])).json()
         self.assertTrue("lg" in items_response["layouts"])
+
+    def test_dashboard_from_template(self):
+        response = self.client.post(
+            "/api/dashboard/", data={"name": "another", "use_template": "DEFAULT_APP"}, content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertGreater(DashboardItem.objects.count(), 1)

@@ -1,16 +1,21 @@
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
+
+from django.utils import timezone
 
 from ee.clickhouse.client import sync_execute
 from ee.clickhouse.models.property import parse_prop_clauses
 from ee.clickhouse.queries.util import parse_timestamps
 from ee.clickhouse.sql.events import EXTRACT_TAG_REGEX, EXTRACT_TEXT_REGEX
+from ee.clickhouse.sql.paths.path import PATHS_QUERY_FINAL
 from posthog.constants import AUTOCAPTURE_EVENT, CUSTOM_EVENT, SCREEN_EVENT
-from posthog.models.filter import Filter
+from posthog.models.filters import Filter
+from posthog.models.filters.path_filter import PathFilter
 from posthog.models.team import Team
-from posthog.queries.base import BaseQuery
+from posthog.queries.paths import Paths
+from posthog.utils import relative_date_parse
 
 
-class ClickhousePaths(BaseQuery):
+class ClickhousePaths(Paths):
     def _determine_path_type(self, requested_type=None):
         # Default
         event: Optional[str] = "$pageview"
@@ -33,11 +38,12 @@ class ClickhousePaths(BaseQuery):
                 path_type = "event"
         return event, path_type, start_comparator
 
-    def calculate_paths(self, filter: Filter, team: Team):
-        parsed_date_from, parsed_date_to = parse_timestamps(filter=filter)
+    def calculate_paths(self, filter: PathFilter, team: Team):
+
+        parsed_date_from, parsed_date_to, _ = parse_timestamps(filter=filter, team_id=team.pk)
         event, path_type, start_comparator = self._determine_path_type(filter.path_type if filter else None)
 
-        prop_filters, prop_filter_params = parse_prop_clauses("uuid", filter.properties, team)
+        prop_filters, prop_filter_params = parse_prop_clauses(filter.properties, team.pk)
 
         # Step 0. Event culling subexpression for step 1.
         # Make an expression that removes events in a session that are definitely unused.
@@ -51,155 +57,20 @@ class ClickhousePaths(BaseQuery):
                 excess_row_filter += " or neighbor(marked_session_start, {}, 0) = 1".format(-i)
         excess_row_filter += ")"
 
-        # Step 1. Make a table with the following fields from events:
-        #
-        # - person_id = dedupe event distinct_ids into person_id
-        # - timestamp
-        # - path_type = either name of event or $current_url or ...
-        # - new_session = this is 1 when the event is from a new session
-        #                 or 0 if it's less than 30min after and for the same person_id as the previous event
-        # - marked_session_start = this is the same as "new_session" if no start point given, otherwise it's 1 if
-        #                          the current event is the start point (e.g. path_start=/about) or 0 otherwise
-        paths_query = """
-            SELECT 
-                person_id,
-                timestamp,
-                event_id,
-                path_type,
-                neighbor(person_id, -1) != person_id OR dateDiff('minute', toDateTime(neighbor(timestamp, -1)), toDateTime(timestamp)) > 30 AS new_session,
-                {marked_session_start} as marked_session_start
-            FROM (
-                SELECT 
-                    timestamp,
-                    person_id,
-                    events.uuid AS event_id,
-                    {path_type} AS path_type
-                    {select_elements_chain}
-                FROM events_with_array_props_view AS events
-                JOIN person_distinct_id ON person_distinct_id.distinct_id = events.distinct_id
-                WHERE 
-                    events.team_id = %(team_id)s 
-                    AND {event_query}
-                    {filters}
-                    {parsed_date_from}
-                    {parsed_date_to}
-                GROUP BY 
-                    person_id, 
-                    timestamp, 
-                    event_id, 
-                    path_type
-                    {group_by_elements_chain}
-                ORDER BY 
-                    person_id, 
-                    timestamp
-            )
-            WHERE {excess_row_filter}
-        """.format(
+        paths_query = PATHS_QUERY_FINAL.format(
             event_query="event = %(event)s"
             if event
             else "event NOT IN ('$autocapture', '$pageview', '$identify', '$pageleave', '$screen')",
             path_type=path_type,
             parsed_date_from=parsed_date_from,
             parsed_date_to=parsed_date_to,
-            filters=prop_filters if filter.properties else "",
+            filters=prop_filters,
             marked_session_start="{} = %(start_point)s".format(start_comparator)
             if filter and filter.start_point
             else "new_session",
             excess_row_filter=excess_row_filter,
             select_elements_chain=", events.elements_chain as elements_chain" if event == AUTOCAPTURE_EVENT else "",
             group_by_elements_chain=", events.elements_chain" if event == AUTOCAPTURE_EVENT else "",
-        )
-
-        # Step 2.
-        # - Convert new_session = {1 or 0} into
-        #      ---> session_id = {1, 2, 3...}
-        # - Remove all "marked_session_start = 0" rows at the start of a session
-        paths_query = """
-            SELECT 
-                person_id,
-                event_id,
-                timestamp,
-                path_type,
-                runningAccumulate(session_id_sumstate) as session_id
-            FROM (
-                SELECT 
-                    *,
-                    sumState(new_session) AS session_id_sumstate
-                FROM 
-                    ({paths_query})
-                GROUP BY
-                    person_id,
-                    timestamp,
-                    event_id,
-                    path_type,
-                    new_session,
-                    marked_session_start
-                ORDER BY 
-                    person_id, 
-                    timestamp
-            )
-            WHERE
-                marked_session_start = 1 or
-                (neighbor(marked_session_start, -1) = 1 and neighbor(session_id, -1) = session_id) or
-                (neighbor(marked_session_start, -2) = 1 and neighbor(session_id, -2) = session_id) or
-                (neighbor(marked_session_start, -3) = 1 and neighbor(session_id, -3) = session_id)
-        """.format(
-            paths_query=paths_query
-        )
-
-        # Step 3.
-        # - Add event index per session
-        # - Use the index and path_type to create a path key (e.g. "1_/pricing", "2_/help")
-        # - Remove every unused row per session (5th and later rows)
-        #   Those rows will only be there if many filter.start_point rows are in a query.
-        #   For example start_point=/pricing and the user clicked back and forth between pricing and other pages.
-        paths_query = """
-            SELECT
-                person_id,
-                event_id,
-                timestamp,
-                path_type,
-                session_id,
-                (neighbor(session_id, -4) = session_id ? 5 :
-                (neighbor(session_id, -3) = session_id ? 4 :
-                (neighbor(session_id, -2) = session_id ? 3 :
-                (neighbor(session_id, -1) = session_id ? 2 : 1)))) as session_index,
-                concat(toString(session_index), '_', path_type) as path_key,
-                if(session_index > 1, neighbor(path_key, -1), null) AS last_path_key,
-                if(session_index > 1, neighbor(event_id, -1), null) AS last_event_id
-            FROM ({paths_query})
-            WHERE
-                session_index <= 4
-        """.format(
-            paths_query=paths_query
-        )
-
-        # Step 4.
-        # - Aggregate and get counts for unique pairs
-        # - Filter out the entry rows that come from "null"
-        paths_query = """
-            SELECT 
-                last_path_key as source_event,
-                any(last_event_id) as source_event_id,
-                path_key as target_event,
-                any(event_id) target_event_id, 
-                COUNT(*) AS event_count
-            FROM (
-                {paths_query}
-            )
-            WHERE 
-                source_event IS NOT NULL
-                AND target_event IS NOT NULL
-            GROUP BY
-                source_event,
-                target_event
-            ORDER BY
-                event_count DESC,
-                source_event,
-                target_event
-            LIMIT 20
-        """.format(
-            paths_query=paths_query
         )
 
         params: Dict = {
@@ -220,6 +91,3 @@ class ClickhousePaths(BaseQuery):
 
         resp = sorted(resp, key=lambda x: x["value"], reverse=True)
         return resp
-
-    def run(self, filter: Filter, team: Team, *args, **kwargs) -> List[Dict[str, Any]]:
-        return self.calculate_paths(filter=filter, team=team)

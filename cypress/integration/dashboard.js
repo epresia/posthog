@@ -8,8 +8,15 @@ describe('Dashboards', () => {
         cy.get('h1').should('contain', 'Dashboards')
     })
 
+    it('Pinned dashboards on menu', () => {
+        cy.get('[data-attr=menu-item-events]').click() // to make sure the dashboards menu item is not the active one
+        cy.get('[data-attr=menu-item-dashboards]').trigger('mouseover') // hover over dashboards menu item
+        cy.get('.pinned-dashboards').should('be.visible')
+        cy.get('[data-attr=menu-item-dashboard-0]').should('be.visible')
+    })
+
     it('Share dashboard', () => {
-        cy.get('[data-attr=dashboard-name-0]').click()
+        cy.get('[data-attr=dashboard-name]').contains('Default').click()
         cy.get('[data-attr=dashboard-item-0]').should('exist')
 
         cy.get('[data-attr=dashboard-share-button]').click()
@@ -19,26 +26,40 @@ describe('Dashboards', () => {
             .then((link) => {
                 cy.wait(200)
                 cy.visit(link)
+                cy.get('[data-attr="dashboard-item-title"').should('contain', 'popular browsers')
             })
     })
 
-    it('Create dashboard', () => {
-        cy.get('[data-attr="new-dashboard"]').click({ force: true })
+    it('Create an empty dashboard', () => {
+        cy.get('[data-attr="new-dashboard"]').click()
+        cy.get('[data-attr=dashboard-name-input]').clear().type('YDefault')
+        cy.get('button').contains('Create').click()
 
-        cy.get('[data-attr=modal-prompt]').clear().type('Test Dashboard')
-        cy.contains('OK').click()
-        cy.contains('Test Dashboard').should('exist')
+        cy.contains('YDefault').should('exist')
+        cy.contains('There are no panels').should('exist')
+    })
+
+    it('Create dashboard from a template', () => {
+        cy.get('[data-attr="new-dashboard"]').click()
+        cy.get('[data-attr=dashboard-name-input]').clear().type('XDefault')
+        cy.get('[data-attr=copy-from-template]').click()
+        cy.get('[data-attr=dashboard-select-default-app]').click()
+
+        cy.get('button').contains('Create').click()
+
+        cy.contains('XDefault').should('exist')
+        cy.get('.dashboard-item').its('length').should('be.gte', 2)
     })
 
     it('Click on a dashboard item dropdown and view graph', () => {
-        cy.get('[data-attr=dashboard-name-0]').click()
+        cy.get('[data-attr=dashboard-name]').contains('Web Analytics').click()
         cy.get('[data-attr=dashboard-item-0-dropdown]').click()
         cy.get('[data-attr=dashboard-item-0-dropdown-view]').click()
         cy.location('pathname').should('include', '/insights')
     })
 
     it('Rename dashboard item', () => {
-        cy.get('[data-attr=dashboard-name-0]').click()
+        cy.get('[data-attr=dashboard-name]').contains('Web Analytics').click()
         cy.get('[data-attr=dashboard-item-0-dropdown]').click()
         cy.get('[data-attr="dashboard-item-0-dropdown-rename"]').click({ force: true })
 
@@ -48,7 +69,7 @@ describe('Dashboards', () => {
     })
 
     it('Color dashboard item', () => {
-        cy.get('[data-attr=dashboard-name-0]').click()
+        cy.get('[data-attr=dashboard-name]').contains('Web Analytics').click()
         cy.get('[data-attr=dashboard-item-0-dropdown]').click()
         cy.get('[data-attr="dashboard-item-0-dropdown-color"]').trigger('mouseover')
         cy.get('[data-attr="dashboard-item-0-dropdown-color-1"]').click({ force: true })
@@ -60,7 +81,7 @@ describe('Dashboards', () => {
     })
 
     it('Copy dashboard item', () => {
-        cy.get('[data-attr=dashboard-name-0]').click()
+        cy.get('[data-attr=dashboard-name]').contains('Web Analytics').click()
         cy.get('[data-attr=dashboard-item-0-dropdown]').click()
         cy.get('[data-attr="dashboard-item-0-dropdown-copy"]').trigger('mouseover')
         cy.get('[data-attr="dashboard-item-0-dropdown-copy-0"]').click({ force: true })
@@ -68,14 +89,14 @@ describe('Dashboards', () => {
     })
 
     it('Duplicate dashboard item', () => {
-        cy.get('[data-attr=dashboard-name-0]').click()
+        cy.get('[data-attr=dashboard-name]').contains('Web Analytics').click()
         cy.get('[data-attr=dashboard-item-0-dropdown]').click()
         cy.get('[data-attr="dashboard-item-0-dropdown-duplicate"]').click({ force: true })
         cy.get('[data-attr=success-toast]').should('exist')
     })
 
     it('Move dashboard item', () => {
-        cy.get('[data-attr=dashboard-name-0]').click()
+        cy.get('[data-attr=dashboard-name]').contains('Web Analytics').click()
         cy.get('[data-attr=dashboard-item-0-dropdown]').click()
         cy.get('[data-attr="dashboard-item-0-dropdown-move"]').trigger('mouseover')
         cy.get('[data-attr="dashboard-item-0-dropdown-move-0"]').click({ force: true })

@@ -1,19 +1,26 @@
 import json
 import uuid
-from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Union
 
+import celery
 import pytz
+import statsd
 from dateutil.parser import isoparse
-from django.utils.timezone import now
+from django.conf import settings
+from django.utils import timezone
 from rest_framework import serializers
+from sentry_sdk import capture_exception
 
 from ee.clickhouse.client import sync_execute
 from ee.clickhouse.models.element import chain_to_elements, elements_to_string
 from ee.clickhouse.sql.events import GET_EVENTS_BY_TEAM_SQL, GET_EVENTS_SQL, INSERT_EVENT_SQL
-from ee.kafka.client import ClickhouseProducer
-from ee.kafka.topics import KAFKA_EVENTS
+from ee.idl.gen import events_pb2
+from ee.kafka_client.client import ClickhouseProducer
+from ee.kafka_client.topics import KAFKA_EVENTS
+from ee.models.hook import Hook
+from posthog.models.action_step import ActionStep
 from posthog.models.element import Element
+from posthog.models.person import Person
 from posthog.models.team import Team
 
 
@@ -22,13 +29,15 @@ def create_event(
     event: str,
     team: Team,
     distinct_id: str,
-    timestamp: Optional[Union[datetime, str]] = None,
+    timestamp: Optional[Union[timezone.datetime, str]] = None,
     properties: Optional[Dict] = {},
     elements: Optional[List[Element]] = None,
+    site_url: Optional[str] = None,
 ) -> str:
 
     if not timestamp:
-        timestamp = now()
+        timestamp = timezone.now()
+    assert timestamp is not None
 
     # clickhouse specific formatting
     if isinstance(timestamp, str):
@@ -40,18 +49,43 @@ def create_event(
     if elements and len(elements) > 0:
         elements_chain = elements_to_string(elements=elements)
 
-    data = {
-        "uuid": str(event_uuid),
-        "event": event,
-        "properties": json.dumps(properties),
-        "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"),
-        "team_id": team.pk,
-        "distinct_id": distinct_id,
-        "created_at": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"),
-        "elements_chain": elements_chain,
-    }
+    pb_event = events_pb2.Event()
+    pb_event.uuid = str(event_uuid)
+    pb_event.event = event
+    pb_event.properties = json.dumps(properties)
+    pb_event.timestamp = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
+    pb_event.team_id = team.pk
+    pb_event.distinct_id = str(distinct_id)
+    pb_event.elements_chain = elements_chain
+    pb_event.created_at = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
+
     p = ClickhouseProducer()
-    p.produce(sql=INSERT_EVENT_SQL, topic=KAFKA_EVENTS, data=data)
+
+    p.produce_proto(sql=INSERT_EVENT_SQL, topic=KAFKA_EVENTS, data=pb_event)
+
+    if team.slack_incoming_webhook or (
+        team.organization.is_feature_available("zapier")
+        and Hook.objects.filter(event="action_performed", team=team).exists()
+    ):
+        try:
+            statsd.Counter("%s_posthog_cloud_hooks_send_task" % (settings.STATSD_PREFIX,)).increment()
+            celery.current_app.send_task(
+                "ee.tasks.webhooks_ee.post_event_to_webhook_ee",
+                (
+                    {
+                        "event": event,
+                        "properties": properties,
+                        "distinct_id": distinct_id,
+                        "timestamp": timestamp,
+                        "elements_chain": elements_chain,
+                    },
+                    team.pk,
+                    site_url,
+                ),
+            )
+        except:
+            capture_exception()
+
     return str(event_uuid)
 
 
@@ -106,7 +140,9 @@ class ClickhouseEventSerializer(serializers.Serializer):
             prop_vals = [res.strip('"') for res in event[9]]
             return dict(zip(event[8], prop_vals))
         else:
-            props = json.loads(event[2])
+            # parse_constants gets called for any NaN, Infinity etc values
+            # we just want those to be returned as None
+            props = json.loads(event[2], parse_constant=lambda x: None)
             unpadded = {key: value.strip('"') if isinstance(value, str) else value for key, value in props.items()}
             return unpadded
 
@@ -131,13 +167,15 @@ class ClickhouseEventSerializer(serializers.Serializer):
         return event[6]
 
 
-def determine_event_conditions(conditions: Dict[str, Union[str, List[str]]]) -> Tuple[str, Dict]:
+def determine_event_conditions(
+    team: Team, conditions: Dict[str, Union[str, List[str]]], long_date_from: bool
+) -> Tuple[str, Dict]:
     result = ""
-    params = {}
+    params: Dict[str, Union[str, List[str]]] = {}
     for idx, (k, v) in enumerate(conditions.items()):
         if not isinstance(v, str):
             continue
-        if k == "after":
+        if k == "after" and not long_date_from:
             timestamp = isoparse(v).strftime("%Y-%m-%d %H:%M:%S.%f")
             result += "AND timestamp > %(after)s"
             params.update({"after": timestamp})
@@ -146,10 +184,10 @@ def determine_event_conditions(conditions: Dict[str, Union[str, List[str]]]) -> 
             result += "AND timestamp < %(before)s"
             params.update({"before": timestamp})
         elif k == "person_id":
-            result += """AND distinct_id IN (
-                SELECT distinct_id FROM person_distinct_id WHERE person_id = %(person_id)s AND team_id = %(team_id)s
-            )"""
-            params.update({"person_id": v})
+            result += """AND distinct_id IN (%(distinct_ids)s)"""
+            distinct_ids = Person.objects.filter(pk=v, team_id=team.pk)[0].distinct_ids
+            distinct_ids = [distinct_id.__str__() for distinct_id in distinct_ids]
+            params.update({"distinct_ids": distinct_ids})
         elif k == "distinct_id":
             result += "AND distinct_id = %(distinct_id)s"
             params.update({"distinct_id": v})

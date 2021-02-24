@@ -1,42 +1,25 @@
 import copy
 import datetime
-import random
 import re
-import string
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import celery
+from dateutil.relativedelta import relativedelta
 from django.conf import settings
 from django.contrib.postgres.fields import JSONField
-from django.core.cache import cache
 from django.db import connection, models, transaction
-from django.db.models import (
-    Exists,
-    F,
-    OuterRef,
-    Prefetch,
-    Q,
-    QuerySet,
-    Subquery,
-    Value,
-    signals,
-)
-from django.db.models.functions import Trunc, TruncDay
-from django.db.models.functions.datetime import TruncHour, TruncMonth, TruncWeek
+from django.db.models import Exists, F, OuterRef, Prefetch, Q, QuerySet, Subquery
 from django.forms.models import model_to_dict
 from django.utils import timezone
-from psycopg2 import sql  # type: ignore
 
-from posthog.constants import TREND_FILTER_TYPE_ACTIONS, TREND_FILTER_TYPE_EVENTS
-from posthog.models.entity import Entity
-from posthog.utils import generate_cache_key
+from posthog.ee import is_ee_enabled
 
 from .action import Action
 from .action_step import ActionStep
 from .element import Element
 from .element_group import ElementGroup
-from .filter import Filter
+from .filters import Filter
 from .person import Person, PersonDistinctId
 from .team import Team
 from .utils import namedtuplefetchall
@@ -48,6 +31,7 @@ LAST_UPDATED_TEAM_ACTION: Dict[int, datetime.datetime] = {}
 TEAM_EVENT_ACTION_QUERY_CACHE: Dict[int, Dict[str, tuple]] = defaultdict(dict)
 # TEAM_EVENT_ACTION_QUERY_CACHE looks like team_id -> event ex('$pageview') -> query
 TEAM_ACTION_QUERY_CACHE: Dict[int, str] = {}
+DEFAULT_EARLIEST_TIME_DELTA = relativedelta(weeks=1)
 
 
 class SelectorPart(object):
@@ -106,10 +90,12 @@ class Selector(object):
 
     def __init__(self, selector: str, escape_slashes=True):
         self.parts = []
+        # Sometimes people manually add *, just remove them as they don't do anything
+        selector = selector.replace("> * > ", "").replace("> *", "")
         tags = re.split(" ", selector.strip())
         tags.reverse()
         for index, tag in enumerate(tags):
-            if tag == ">":
+            if tag == ">" or tag == "":
                 continue
             direct_descendant = False
             if index > 0 and tags[index - 1] == ">":
@@ -141,6 +127,13 @@ class EventManager(models.QuerySet):
                     # If not, it can have any order as long as it's bigger than current element
                     filter["match_{}__gt".format(index)] = F("match_{}".format(index - 1))
         return (subqueries, filter)
+
+    def earliest_timestamp(self, team_id: int):
+        timestamp = self.filter(team_id=team_id).order_by("timestamp").values_list("timestamp", flat=True).first()
+        if timestamp is None:
+            timestamp = timezone.now() - DEFAULT_EARLIEST_TIME_DELTA
+
+        return timestamp.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
     def filter_by_element(self, filters: Dict, team_id: int):
         groups = ElementGroup.objects.filter(team_id=team_id)
@@ -197,6 +190,8 @@ class EventManager(models.QuerySet):
         )
 
     def query_db_by_action(self, action, order_by="-timestamp", start=None, end=None) -> models.QuerySet:
+        from posthog.queries.base import properties_to_Q
+
         events = self
         any_step = Q()
         steps = action.steps.all()
@@ -204,10 +199,12 @@ class EventManager(models.QuerySet):
             return self.none()
 
         for step in steps:
+            step_filter = Filter(data={"properties": step.properties})
+
             subquery = (
                 Event.objects.add_person_id(team_id=action.team_id)
                 .filter(
-                    Filter(data={"properties": step.properties}).properties_to_Q(team_id=action.team_id),
+                    properties_to_Q(step_filter.properties, team_id=action.team_id),
                     pk=OuterRef("id"),
                     **self.filter_by_event(step),
                     **self.filter_by_element(model_to_dict(step), team_id=action.team_id),
@@ -224,113 +221,17 @@ class EventManager(models.QuerySet):
 
         return events
 
-    def filter_by_action(self, action, order_by="-id") -> models.QuerySet:
+    def filter_by_action(self, action: Action, order_by: str = "-id") -> models.QuerySet:
         events = self.filter(action=action).add_person_id(team_id=action.team_id)
         if order_by:
             events = events.order_by(order_by)
         return events
 
-    def filter_by_event_with_people(self, event, team_id, order_by="-id") -> models.QuerySet:
+    def filter_by_event_with_people(self, event, team_id: int, order_by: str = "-id") -> models.QuerySet:
         events = self.filter(team_id=team_id).filter(event=event).add_person_id(team_id=team_id)
         if order_by:
             events = events.order_by(order_by)
         return events
-
-    def query_retention(self, filter: Filter, team) -> dict:
-
-        period = filter.period
-        events: QuerySet = QuerySet()
-        entity = (
-            Entity({"id": "$pageview", "type": TREND_FILTER_TYPE_EVENTS})
-            if not filter.target_entity
-            else filter.target_entity
-        )
-        if entity.type == TREND_FILTER_TYPE_EVENTS:
-            events = Event.objects.filter_by_event_with_people(event=entity.id, team_id=team.id)
-        elif entity.type == TREND_FILTER_TYPE_ACTIONS:
-            events = Event.objects.filter(action__pk=entity.id).add_person_id(team.id)
-
-        filtered_events = events.filter(filter.date_filter_Q).filter(filter.properties_to_Q(team_id=team.pk))
-
-        def _determineTrunc(subject: str, period: str) -> Union[TruncHour, TruncDay, TruncWeek, TruncMonth]:
-            if period == "Hour":
-                return TruncHour(subject)
-            elif period == "Day":
-                return TruncDay(subject)
-            elif period == "Week":
-                return TruncWeek(subject)
-            elif period == "Month":
-                return TruncMonth(subject)
-            else:
-                raise ValueError(f"Period {period} is unsupported.")
-
-        trunc = _determineTrunc("timestamp", period)
-        first_date = filtered_events.annotate(first_date=trunc).values("first_date", "person_id").distinct()
-
-        events_query, events_query_params = filtered_events.query.sql_with_params()
-        first_date_query, first_date_params = first_date.query.sql_with_params()
-
-        full_query = """
-            SELECT
-                FLOOR(DATE_PART('{period}s', first_date - %s) {calculation}) AS first_date,
-                FLOOR(DATE_PART('{period}s', timestamp - first_date) {calculation}) AS date,
-                COUNT(DISTINCT "events"."person_id"),
-                array_agg(DISTINCT "events"."person_id") as people
-            FROM ({events_query}) events
-            LEFT JOIN ({first_date_query}) first_event_date
-              ON (events.person_id = first_event_date.person_id)
-            WHERE timestamp > first_date
-            GROUP BY date, first_date
-        """
-
-        full_query = full_query.format(
-            events_query=events_query,
-            first_date_query=first_date_query,
-            event_date_query=trunc,
-            period="Day" if period == "Week" else period,
-            calculation="/ 7" if period == "Week" else "",
-        )
-
-        with connection.cursor() as cursor:
-            cursor.execute(
-                full_query, (filter.date_from,) + events_query_params + first_date_params,
-            )
-            data = namedtuplefetchall(cursor)
-
-            scores: dict = {}
-            for datum in data:
-                key = round(datum.first_date, 1)
-                if not scores.get(key, None):
-                    scores.update({key: {}})
-                for person in datum.people:
-                    if not scores[key].get(person, None):
-                        scores[key].update({person: 1})
-                    else:
-                        scores[key][person] += 1
-
-        by_dates = {}
-        for row in data:
-            people = sorted(row.people, key=lambda p: scores[round(row.first_date, 1)][int(p)], reverse=True,)
-
-            random_key = "".join(
-                random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(10)
-            )
-            cache_key = generate_cache_key("{}{}{}".format(random_key, str(round(row.first_date, 0)), str(team.pk)))
-            cache.set(
-                cache_key, people, 600,
-            )
-            by_dates.update(
-                {
-                    (int(row.first_date), int(row.date)): {
-                        "count": row.count,
-                        "people": people[0:100],
-                        "offset": 100,
-                        "next": cache_key if len(people) > 100 else None,
-                    }
-                }
-            )
-
-        return by_dates
 
     def create(self, site_url: Optional[str] = None, *args: Any, **kwargs: Any):
         with transaction.atomic():
@@ -353,12 +254,16 @@ class EventManager(models.QuerySet):
                 relations = []
                 for action in event.actions:
                     relations.append(action.events.through(action_id=action.pk, event_id=event.pk))
+                    if is_ee_enabled():
+                        continue  # avoiding duplication here - in EE hooks are handled by webhooks_ee.py
                     action.on_perform(event)
                     if action.post_to_slack:
                         should_post_webhook = True
                 Action.events.through.objects.bulk_create(relations, ignore_conflicts=True)
                 team = kwargs.get("team", event.team)
-                if should_post_webhook and team and team.slack_incoming_webhook:
+                if (
+                    should_post_webhook and team and team.slack_incoming_webhook and not is_ee_enabled()
+                ):  # ee will handle separately
                     celery.current_app.send_task("posthog.tasks.webhooks.post_event_to_webhook", (event.pk, site_url))
 
             return event
@@ -391,7 +296,9 @@ class Event(models.Model):
 
     @property
     def person(self):
-        return Person.objects.get(team_id=self.team_id, persondistinctid__distinct_id=self.distinct_id)
+        return Person.objects.get(
+            team_id=self.team_id, persondistinctid__team_id=self.team_id, persondistinctid__distinct_id=self.distinct_id
+        )
 
     # This (ab)uses query_db_by_action to find which actions match this event
     # We can't use filter_by_action here, as we use this function when we create an event so
@@ -439,6 +346,7 @@ class Event(models.Model):
             # Update the last updated team action timestamp for future reference
             LAST_UPDATED_TEAM_ACTION[self.team_id] = last_updated_action_ts
         else:
+
             # If we have reached this block we are about to use the sql query cache
             # Grab the actions using the cached action query
             actions.raw(TEAM_ACTION_QUERY_CACHE[self.team_id])

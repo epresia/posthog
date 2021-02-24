@@ -1,10 +1,11 @@
 import { kea } from 'kea'
-import api from '../lib/api'
+import api from 'lib/api'
 import { posthogEvents } from 'lib/utils'
-import { userLogicType } from 'types/scenes/userLogicType'
+import { userLogicType } from './userLogicType'
 import { UserType, UserUpdateType } from '~/types'
+import posthog from 'posthog-js'
 
-interface EventProperty {
+export interface EventProperty {
     value: string
     label: string
 }
@@ -19,6 +20,9 @@ export const userLogic = kea<userLogicType<UserType, EventProperty, UserUpdateTy
         userUpdateRequest: (update: UserUpdateType, updateKey?: string) => ({ update, updateKey }),
         userUpdateSuccess: (user: UserType, updateKey?: string) => ({ user, updateKey }),
         userUpdateFailure: (error: string, updateKey?: string) => ({ updateKey, error }),
+        userUpdateLoading: (loading: boolean) => ({ loading }),
+        currentTeamUpdateRequest: (teamId: number) => ({ teamId }),
+        currentOrganizationUpdateRequest: (organizationId: string) => ({ organizationId }),
         completedOnboarding: true,
         logout: true,
     }),
@@ -31,32 +35,46 @@ export const userLogic = kea<userLogicType<UserType, EventProperty, UserUpdateTy
                 userUpdateSuccess: (_, payload) => payload.user,
             },
         ],
+        userUpdateLoading: [
+            false,
+            {
+                userUpdateRequest: () => true,
+                userUpdateSuccess: () => false,
+                userUpdateFailure: () => false,
+            },
+        ],
     },
 
     events: ({ actions }) => ({
-        afterMount: () => actions.loadUser(true),
+        afterMount: () => {
+            actions.loadUser(true)
+        },
     }),
 
     selectors: ({ selectors }) => ({
         eventProperties: [
             () => [selectors.user],
-            (user) =>
-                user?.team.event_properties.map(
-                    (property: string) => ({ value: property, label: property } as EventProperty)
-                ) || ([] as EventProperty[]),
+            (user): EventProperty[] =>
+                user?.team
+                    ? user.team.event_properties.map(
+                          (property: string) => ({ value: property, label: property } as EventProperty)
+                      )
+                    : [],
         ],
         eventPropertiesNumerical: [
             () => [selectors.user],
-            (user) =>
-                user?.team.event_properties_numerical.map(
-                    (property: string) => ({ value: property, label: property } as EventProperty)
-                ) || ([] as EventProperty[]),
+            (user): EventProperty[] =>
+                user?.team
+                    ? user.team.event_properties_numerical.map(
+                          (property: string) => ({ value: property, label: property } as EventProperty)
+                      )
+                    : [],
         ],
-        eventNames: [() => [selectors.user], (user) => user?.team.event_names || []],
+        eventNames: [() => [selectors.user], (user) => user?.team?.event_names ?? []],
         customEventNames: [
-            () => [selectors.user],
-            (user) => {
-                return user?.team.event_names.filter((event: string) => !event.startsWith('!')) || []
+            () => [selectors.eventNames],
+            (eventNames) => {
+                return eventNames.filter((event: string) => !event.startsWith('!'))
             },
         ],
         eventNamesGrouped: [
@@ -66,20 +84,29 @@ export const userLogic = kea<userLogicType<UserType, EventProperty, UserUpdateTy
                     { label: 'Custom events', options: [] as EventProperty[] },
                     { label: 'PostHog events', options: [] as EventProperty[] },
                 ]
-                user?.team.event_names.forEach((name: string) => {
-                    const format = { label: name, value: name } as EventProperty
-                    if (posthogEvents.includes(name)) return data[1].options.push(format)
-                    data[0].options.push(format)
-                })
+                if (user?.team) {
+                    user.team.event_names.forEach((name: string) => {
+                        const format = { label: name, value: name } as EventProperty
+                        if (posthogEvents.includes(name)) {
+                            return data[1].options.push(format)
+                        }
+                        data[0].options.push(format)
+                    })
+                }
                 return data
             },
+        ],
+        demoOnlyProject: [
+            () => [selectors.user],
+            (user): boolean =>
+                (user?.team?.is_demo && user?.organization?.teams && user.organization.teams.length == 1) || false,
         ],
     }),
 
     listeners: ({ actions }) => ({
         loadUser: async ({ resetOnFailure }) => {
             try {
-                const user = await api.get('api/user')
+                const user: UserType = await api.get('api/user')
                 actions.setUser(user)
 
                 if (user && user.id) {
@@ -89,22 +116,51 @@ export const userLogic = kea<userLogicType<UserType, EventProperty, UserUpdateTy
                         id: user.id,
                     })
 
-                    const posthog = (window as any).posthog
                     if (posthog) {
-                        if (posthog.get_distinct_id() !== user.distinct_id) {
+                        // If user is not anonymous and the distinct id is different from the current one, reset
+                        if (
+                            posthog.get_property('$device_id') !== posthog.get_distinct_id() &&
+                            posthog.get_distinct_id() !== user.distinct_id
+                        ) {
                             posthog.reset()
                         }
 
-                        posthog.identify(user.distinct_id, {
-                            email: user.anonymize_data ? null : user.email,
-                        })
+                        posthog.identify(user.distinct_id)
+                        posthog.people.set({ email: user.anonymize_data ? null : user.email })
+
                         posthog.register({
                             posthog_version: user.posthog_version,
                             has_slack_webhook: !!user.team?.slack_incoming_webhook,
+                            is_demo_project: user.team?.is_demo,
+                            realm: user.realm,
                         })
+
+                        if (user.realm === 'cloud') {
+                            // Billing-related properties
+                            // :TODO: Temporary support for legacy `FormattedNumber` type
+                            const current_usage =
+                                typeof user.billing?.current_usage === 'number'
+                                    ? user.billing.current_usage
+                                    : user.billing?.current_usage?.value
+                            const event_allocation =
+                                typeof user.billing?.event_allocation === 'number'
+                                    ? user.billing.event_allocation
+                                    : user.billing?.event_allocation?.value
+
+                            posthog.register({
+                                has_billing_plan: !!user.billing?.plan,
+                                metered_billing: user.billing?.plan?.is_metered_billing,
+                                event_allocation: event_allocation,
+                                allocation_used:
+                                    event_allocation && current_usage !== undefined
+                                        ? current_usage / event_allocation
+                                        : undefined,
+                            })
+                        }
                     }
                 }
-            } catch {
+            } catch (e) {
+                console.error(e)
                 if (resetOnFailure) {
                     actions.setUser(null)
                 }
@@ -119,7 +175,7 @@ export const userLogic = kea<userLogicType<UserType, EventProperty, UserUpdateTy
             }
         },
         logout: () => {
-            window.posthog?.reset()
+            posthog.reset()
             window.location.href = '/logout'
         },
     }),
